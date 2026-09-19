@@ -25,7 +25,7 @@ interface DownloadJob extends DownloadJobReport {
   listeners: Set<(report: DownloadJobReport) => void>;
 }
 
-const jobsDirectory = resolve(process.cwd(), '.local', 'downloads');
+const jobsDirectory = resolve(config.localDirectory, 'downloads');
 
 export class DownloadJobs {
   private readonly jobs = new Map<string, DownloadJob>();

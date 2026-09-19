@@ -1,29 +1,35 @@
 # Omgevingsloket API discovery
 
-## Current status
+## Confirmed capture
 
-No application endpoint is recorded yet. On 20 September 2026, direct HTTP access to the supplied project URL returned the official Anubis browser-verification page, not the application shell. This repository intentionally does not infer, probe, or manufacture API routes from that response.
+On 20 September 2026, a user-authorized visible-browser capture of project `2018110330` confirmed the same-origin API below. The capture contained an Anubis visitor-verification cookie; it is neither documented here nor committed. The application uses the locally authorized session only while valid and never attempts to solve the verification.
 
-## Required discovery procedure
+All confirmed calls are `GET` under:
 
-1. Install Playwright's Chromium once if necessary: `npx playwright install chromium`.
-2. Run `npm run discover -- 2026045710 --har`.
-3. In the visible browser, complete the official verification and open the project summary, each visible content/phase section, a document viewer, and one ordinary downloadable document where available.
-4. Return to the terminal and press Enter. Evidence is stored under gitignored `debug/discovery/`.
-5. Record only verified endpoints below, then implement the HTTP provider. Never copy cookies or authorization values into this document.
+```text
+https://omgevingsloketinzage.omgeving.vlaanderen.be/proxy-omv-up/rs/v1/inzage
+```
 
-## Confirmed request hierarchy
+| Relationship | Confirmed endpoint | Key response fields |
+| --- | --- | --- |
+| Project number → project | `/projecten/header?projectnummer={number}` | `uuid`, `projectnummer`, `projectnaam`, `toestand` |
+| Project → overview | `/projecten/{projectUuid}/project-overzicht` | `bevoegdeOverheid`, decision summary |
+| Project → phases | `/projecten/{projectUuid}/procedure` | phase `uuid` |
+| Phase → events | `/projectfasen/{phaseUuid}/openbare-onderzoeken` and `.../{advies,beslissing,andere}-gebeurtenissen?page={n}&size=100&sort=id` | event `uuid`, event code |
+| Event → files | `/gebeurtenissen/{eventUuid}` | `bestanden[]` with `uuid`, `bestandsnaam`, `omschrijving`, `mimeType`, `grootte`, `veiligheidscategorie` |
+| Public file → download | `/bestanden/{fileUuid}/download` | PDF response, `Content-Disposition`, `Content-Length` |
 
-Pending a user-verified network capture.
+## Confirmed behavior
 
-| Relationship | Endpoint/method | Required identifiers | Evidence |
-| --- | --- | --- | --- |
-| Project number to project | Pending | Pending | Pending |
-| Project to visible contents | Pending | Pending | Pending |
-| Content to documents | Pending | Pending | Pending |
-| Document viewer | Pending | Pending | Pending |
-| Document download | Pending | Pending | Pending |
+- The observed dossier has project UUID `78Jiio5hTkScAWF-m1ikZg`, phase UUID `CVVCIlCqTAq_cfYodAu6fA`, and event UUID `1CRvyT15SQaSnTSl_kCaIw`.
+- Its event detail contained 13 PDF files marked `veiligheidscategorie: PUBLIEK_DOWNLOAD`.
+- Confirmed download responses were `200 application/pdf` with a normal attachment filename. The provider exposes only files with that category as downloadable; other files remain view-only.
+- Paged event collections use `content` and `totalPages`. The provider requests all pages at size 100 while retaining the configured upstream concurrency cap.
+- `openbare-onderzoeken` can group its actual event summaries under each result's `gebeurtenis[]` array rather than return event summaries directly.
+- Advice summaries can identify the detail resource as `adviesVraagGebeurtenisUuid`; that value is accepted by the same `/gebeurtenissen/{id}` detail endpoint.
 
-## Provider implementation rule
+## Scope and limitations
 
-The provider must map external objects into `Project` and `Document`, produce a browser-safe opaque document ID, and allow only exact hosts observed in the capture. It must classify downloadable versus view-only files from the public site’s actual behavior. No API contract is confirmed until it is linked to a capture artifact.
+The implemented provider follows every procedure phase and all four captured event collections. The capture also showed a project `inhouden` endpoint, but did not include a nested content-to-file request; it is intentionally not guessed or traversed. A later authorized capture of that UI branch is required before adding it.
+
+If the session expires or the service changes, re-run `npm run authorize -- <project>` and `npm run discover -- <project> --har`, then compare the new capture with these documented contracts.

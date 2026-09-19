@@ -5,10 +5,10 @@ import express from 'express';
 import pino from 'pino';
 import { createApp } from './app.js';
 import { config } from './config.js';
-import { DiscoveryRequiredProvider } from './omgevingsloket/provider.js';
+import { HttpOmgevingsloketProvider } from './omgevingsloket/http-provider.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
-const app = createApp(new DiscoveryRequiredProvider(), logger);
+const app = createApp(new HttpOmgevingsloketProvider(), logger);
 const here = dirname(fileURLToPath(import.meta.url));
 const frontend = resolve(here, '../../frontend/dist');
 if (existsSync(frontend)) {

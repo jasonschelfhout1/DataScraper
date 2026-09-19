@@ -22,8 +22,8 @@ export function parseProjectInput(input: string): string {
     throw new InputError('The URL must be an HTTPS project URL from the official Omgevingsloket site.');
   }
   const segments = url.pathname.split('/').filter(Boolean);
-  if (segments.length !== 1 || !PROJECT_NUMBER.test(segments[0])) {
-    throw new InputError('The URL must point directly to a 10-digit project number.');
+  if (segments.length < 1 || !PROJECT_NUMBER.test(segments[0])) {
+    throw new InputError('The URL must begin with a 10-digit project number.');
   }
   return segments[0];
 }

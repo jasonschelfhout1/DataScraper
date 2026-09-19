@@ -4,9 +4,7 @@ A local, small-scale utility for listing and downloading documents that the Flem
 
 ## Status and upstream discovery
 
-The repository includes the complete local application foundation, but deliberately does **not** guess the government site's private API. A direct request to the supplied site currently receives official Anubis browser verification. Until a verified discovery session records the actual public requests, project search returns a clear `DISCOVERY_REQUIRED` message rather than attempting to evade that control.
-
-See [the API discovery record](docs/omgevingsloket-api.md) for the current confirmed state and the exact manual procedure.
+The HTTP provider is based only on a user-authorized network capture of the public Inzageloket. It follows project → phase → event → file relationships, identifies files marked `PUBLIEK_DOWNLOAD`, and downloads only those files. See [the confirmed API record](docs/omgevingsloket-api.md).
 
 ## Install and run
 
@@ -35,7 +33,7 @@ npm run discover -- 2026045710 --har
 
 `discover` accepts either a 10-digit number, its optional `OMV_` prefix, or an exact `https://omgevingsloketinzage.omgeving.vlaanderen.be/<number>` URL. It records sanitized JSON metadata and, when requested, a sanitized HAR with response bodies omitted below `debug/discovery/`. Do not commit those artifacts. The session cookie file is stored mode-restricted under `.local/` and must be renewed when it expires.
 
-After discovery, document the verified API relationships in `docs/omgevingsloket-api.md` and replace only `DiscoveryRequiredProvider` with an HTTP provider that uses those proven routes. This containment is intentional: an upstream API change should be limited to `backend/src/omgevingsloket/`.
+The confirmed provider is isolated in `backend/src/omgevingsloket/`. If Vlaanderen changes the external API, re-run discovery, update the API record, and change only this integration layer.
 
 ## Architecture
 
@@ -55,7 +53,7 @@ Set `DEBUG_OMGEVINGSLOKET=true` when implementing a confirmed provider to log sa
 
 ```powershell
 npm test
-# Manual only, and remains unavailable until a real provider is documented:
+# Manual only; uses your currently authorized session:
 npm run test:integration -- 2026045710
 ```
 

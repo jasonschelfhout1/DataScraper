@@ -6,7 +6,7 @@ import { config } from '../config.js';
 const cookieSchema = z.object({ name: z.string().min(1), value: z.string(), domain: z.string(), expires: z.number().optional() });
 const sessionSchema = z.object({ savedAt: z.string(), cookies: z.array(cookieSchema) });
 export type SessionCookie = z.infer<typeof cookieSchema>;
-export const sessionPath = resolve(process.cwd(), '.local', 'omgevingsloket-session.json');
+export const sessionPath = resolve(config.localDirectory, 'omgevingsloket-session.json');
 
 export async function saveSession(cookies: SessionCookie[]): Promise<void> {
   const allowed = cookies.filter((cookie) => config.allowedHosts.has(cookie.domain.replace(/^\./, '')));

@@ -1,5 +1,10 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
+
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+dotenv.config({ path: resolve(projectRoot, '.env') });
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
@@ -17,5 +22,7 @@ const baseUrl = new URL(parsed.OMGEVINGSLOKET_BASE_URL);
 export const config = {
   ...parsed,
   baseUrl,
+  projectRoot,
+  localDirectory: resolve(projectRoot, '.local'),
   allowedHosts: new Set([baseUrl.hostname]),
 };

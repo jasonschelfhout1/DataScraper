@@ -6,6 +6,7 @@ describe('project input validation', () => {
     expect(parseProjectInput('2026045710')).toBe('2026045710');
     expect(parseProjectInput(' OMV_2026045710 ')).toBe('2026045710');
     expect(parseProjectInput('https://omgevingsloketinzage.omgeving.vlaanderen.be/2026045710')).toBe('2026045710');
+    expect(parseProjectInput('https://omgevingsloketinzage.omgeving.vlaanderen.be/2026045710/a-phase/an-event')).toBe('2026045710');
   });
   it('rejects malformed and unsafe URLs', () => {
     expect(() => parseProjectInput('202604571')).toThrow();

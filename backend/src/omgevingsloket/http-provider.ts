@@ -1,0 +1,155 @@
+import { Readable } from 'node:stream';
+import { z } from 'zod';
+import { config } from '../config.js';
+import { OmgevingsloketHttpClient } from './client.js';
+import { UpstreamError } from './errors.js';
+import type { Document, DownloadStream, OmgevingsloketProvider, Project } from './types.js';
+
+const idSchema = z.string().regex(/^[A-Za-z0-9_-]{10,128}$/);
+const headerSchema = z.object({ uuid: idSchema, projectnummer: z.string(), projectnaam: z.string().optional(), toestand: z.string().optional() }).passthrough();
+const overviewSchema = z.object({ bevoegdeOverheid: z.string().optional(), beslissing: z.object({ beslissing: z.string().optional() }).nullable().optional() }).passthrough();
+const phaseSchema = z.object({ uuid: idSchema }).passthrough();
+const eventSchema = z.object({ uuid: idSchema.optional(), adviesVraagGebeurtenisUuid: idSchema.optional(), gebeurtenis: z.object({ code: z.string().optional() }).optional() })
+  .passthrough()
+  .refine((event) => event.uuid !== undefined || event.adviesVraagGebeurtenisUuid !== undefined, 'Missing event identifier');
+const pageSchema = z.object({ content: z.array(z.unknown()), totalPages: z.number().int().nonnegative().optional(), last: z.boolean().optional() }).passthrough();
+const fileSchema = z.object({
+  uuid: idSchema, bestandsnaam: z.string().min(1), omschrijving: z.string().nullable().optional(), mimeType: z.string().nullable().optional(),
+  grootte: z.string().nullable().optional(), veiligheidscategorie: z.string().nullable().optional(),
+}).passthrough();
+const eventDetailSchema = z.object({ bestanden: z.array(fileSchema).optional() }).passthrough();
+
+type HttpClient = Pick<OmgevingsloketHttpClient, 'expectJson' | 'fetch'>;
+const API_PREFIX = '/proxy-omv-up/rs/v1/inzage';
+const eventCollections = [
+  { suffix: 'openbare-onderzoeken', category: 'Openbare onderzoeken', paged: false },
+  { suffix: 'advies-gebeurtenissen', category: 'Adviezen', paged: true },
+  { suffix: 'beslissing-gebeurtenissen', category: 'Beslissingen', paged: true },
+  { suffix: 'andere-gebeurtenissen', category: 'Andere gebeurtenissen', paged: true },
+] as const;
+
+/** Confirmed from the user-authorized 2018110330 capture. */
+export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
+  constructor(private readonly client: HttpClient = new OmgevingsloketHttpClient()) {}
+
+  async getProject(projectNumber: string): Promise<Project> {
+    try {
+      const header = headerSchema.parse(await this.json(`/projecten/header?projectnummer=${encodeURIComponent(projectNumber)}`));
+      const overview = overviewSchema.parse(await this.json(`/projecten/${header.uuid}/project-overzicht`));
+      return {
+        projectNumber: header.projectnummer,
+        ...(header.projectnaam ? { title: header.projectnaam } : {}),
+        ...(header.toestand ? { status: header.toestand } : {}),
+        ...(overview.bevoegdeOverheid ? { municipality: overview.bevoegdeOverheid } : {}),
+        ...(overview.beslissing?.beslissing ? { description: overview.beslissing.beslissing } : {}),
+      };
+    } catch (error) {
+      throw normalizeSchemaError(error);
+    }
+  }
+
+  async getDocuments(projectNumber: string): Promise<Document[]> {
+    try {
+      const header = headerSchema.parse(await this.json(`/projecten/header?projectnummer=${encodeURIComponent(projectNumber)}`));
+      const procedure = z.array(phaseSchema).parse(await this.json(`/projecten/${header.uuid}/procedure`));
+      const discovered = await Promise.all(procedure.map((phase) => this.documentsForPhase(projectNumber, phase.uuid)));
+      const unique = new Map<string, Document>();
+      discovered.flat().forEach((document) => unique.set(document.id, document));
+      return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name, 'nl'));
+    } catch (error) {
+      throw normalizeSchemaError(error);
+    }
+  }
+
+  async downloadDocument(_projectNumber: string, documentId: string): Promise<DownloadStream> {
+    const response = await this.client.fetch(this.url(`/bestanden/${documentId}/download`));
+    if (!response.ok || !response.body) {
+      throw new UpstreamError('The upstream service could not provide this document.', response.status === 404 ? 'not_found' : 'unexpected', response.status);
+    }
+    const contentType = response.headers.get('content-type') ?? undefined;
+    if (contentType?.includes('text/html')) {
+      throw new UpstreamError('Official browser verification is required. Run npm run authorize and try again.', 'verification_required', response.status);
+    }
+    return {
+      stream: Readable.fromWeb(response.body as unknown as import('node:stream/web').ReadableStream),
+      filename: filenameFromDisposition(response.headers.get('content-disposition')) ?? `${documentId}.bin`,
+      contentType,
+      ...(response.headers.get('content-length') ? { contentLength: Number(response.headers.get('content-length')) } : {}),
+    };
+  }
+
+  private async documentsForPhase(projectNumber: string, phaseId: string): Promise<Document[]> {
+    const events = (await Promise.all(eventCollections.map(async (collection) => ({
+      category: collection.category,
+      events: await this.eventsForCollection(phaseId, collection.suffix, collection.paged),
+    })))).flatMap(({ category, events }) => events.map((eventId) => ({ category, eventId })));
+    const details = await Promise.all(events.map(async ({ category, eventId }) => ({
+      category, eventId, details: z.array(eventDetailSchema).parse(await this.json(`/gebeurtenissen/${eventId}`)),
+    })));
+    return details.flatMap(({ category, eventId, details: eventDetails }) => eventDetails.flatMap((detail) =>
+      (detail.bestanden ?? []).map((file) => ({
+        id: file.uuid,
+        projectNumber,
+        name: file.bestandsnaam,
+        ...(file.omschrijving ? { description: file.omschrijving } : {}),
+        category,
+        ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+        ...(parseSize(file.grootte) !== undefined ? { size: parseSize(file.grootte) } : {}),
+        viewerUrl: new URL(`/${projectNumber}/${phaseId}/${eventId}`, config.baseUrl).toString(),
+        downloadable: file.veiligheidscategorie === 'PUBLIEK_DOWNLOAD',
+      })),
+    ));
+  }
+
+  private async eventsForCollection(phaseId: string, suffix: string, paged: boolean): Promise<string[]> {
+    const path = `/projectfasen/${phaseId}/${suffix}`;
+    const first = await this.json(paged ? `${path}?page=0&size=100&sort=id` : path);
+    if (Array.isArray(first)) return extractEventIds(first);
+    const page = pageSchema.parse(first);
+    if (!paged || page.totalPages === undefined || page.totalPages <= 1) return extractEventIds(page.content);
+    const rest = await Promise.all(Array.from({ length: page.totalPages - 1 }, async (_, index) => {
+      const next = pageSchema.parse(await this.json(`${path}?page=${index + 1}&size=100&sort=id`));
+      return extractEventIds(next.content);
+    }));
+    return [...extractEventIds(page.content), ...rest.flat()];
+  }
+
+  private json(path: string): Promise<unknown> {
+    return this.client.expectJson(this.url(path));
+  }
+
+  private url(path: string): URL {
+    return new URL(`${API_PREFIX}${path}`, config.baseUrl);
+  }
+}
+
+function parseSize(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = /^(\d+(?:[.,]\d+)?)\s*(B|KB|MB|GB)$/i.exec(value.trim());
+  if (!match) return undefined;
+  const unit = match[2].toUpperCase();
+  const multiplier = unit === 'GB' ? 1024 ** 3 : unit === 'MB' ? 1024 ** 2 : unit === 'KB' ? 1024 : 1;
+  return Math.round(Number(match[1].replace(',', '.')) * multiplier);
+}
+
+function filenameFromDisposition(value: string | null): string | undefined {
+  const match = /filename="?([^";]+)"?/i.exec(value ?? '');
+  return match?.[1];
+}
+
+function extractEventIds(items: unknown[]): string[] {
+  return items.flatMap((item) => {
+    const publicInvestigation = z.object({ gebeurtenis: z.array(eventSchema) }).passthrough().safeParse(item);
+    if (publicInvestigation.success) return publicInvestigation.data.gebeurtenis.map(eventId);
+    return [eventId(eventSchema.parse(item))];
+  });
+}
+
+function eventId(event: z.infer<typeof eventSchema>): string {
+  return event.uuid ?? event.adviesVraagGebeurtenisUuid!;
+}
+
+function normalizeSchemaError(error: unknown): Error {
+  if (error instanceof z.ZodError) return new UpstreamError('The upstream service returned an unexpected response.', 'unexpected');
+  return error instanceof Error ? error : new UpstreamError('The upstream service returned an unexpected response.', 'unexpected');
+}
