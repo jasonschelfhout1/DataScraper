@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Omgevingsloket discovery and local visitor-session state
+debug/
+.local/
