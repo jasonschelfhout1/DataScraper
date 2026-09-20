@@ -49,6 +49,7 @@ describe('authentication boundary', () => {
   it('returns to login after logout or an authenticated API 401', async () => {
     fetchMock.mockResolvedValueOnce(json({ authenticated: false }));
     fetchMock.mockResolvedValueOnce(json({ authenticated: true, username: 'test-user' }));
+    fetchMock.mockResolvedValueOnce(json({ projects: 0, currentlyPublicProjects: 0, documents: 0, archivedDocuments: 0, viewOnlyDocuments: 0, pendingDownloads: 0, failedDownloads: 0, pendingTasks: 0, paused: false }));
     fetchMock.mockResolvedValueOnce(json({ authenticated: false }));
     render(<App />);
     await screen.findByLabelText('Username');
@@ -60,13 +61,14 @@ describe('authentication boundary', () => {
     expect(await screen.findByLabelText('Username')).toBeTruthy();
 
     fetchMock.mockResolvedValueOnce(json({ authenticated: true, username: 'test-user' }));
+    fetchMock.mockResolvedValueOnce(json({ projects: 0, currentlyPublicProjects: 0, documents: 0, archivedDocuments: 0, viewOnlyDocuments: 0, pendingDownloads: 0, failedDownloads: 0, pendingTasks: 0, paused: false }));
     fetchMock.mockResolvedValueOnce(json({ code: 'UNAUTHORIZED', message: 'Authentication required.' }, 401));
     fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'test-user' } });
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test-password' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await screen.findByRole('button', { name: 'Log out test-user' });
-    fireEvent.change(screen.getByLabelText('Project number or Omgevingsloket URL'), { target: { value: '2026045710' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search project' }));
+    fireEvent.change(screen.getByLabelText('Search project number, municipality or project name'), { target: { value: '2026045710' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search archive' }));
     await waitFor(() => expect(screen.getByLabelText('Username')).toBeTruthy());
   });
 });

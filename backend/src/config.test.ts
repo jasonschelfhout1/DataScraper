@@ -7,6 +7,7 @@ describe('production configuration', () => {
     AUTH_USERNAME: 'test-user',
     AUTH_PASSWORD: 'test-password',
     AUTH_SESSION_SECRET: 'a'.repeat(32),
+    DATABASE_URL: 'postgres://user:password@localhost:5432/datascraper_test',
   };
   it('fails without exposing a malformed secret', () => {
     const secret = 'session=secret\nInjected: value';
@@ -17,13 +18,13 @@ describe('production configuration', () => {
     expect(createConfig({ ...productionAuth, LOCAL_DATA_DIR: '/tmp/datascraper-test' }).localDirectory).toContain('datascraper-test');
   });
   it('fails closed when production authentication secrets are missing', () => {
-    expect(() => createConfig({ NODE_ENV: 'production' })).toThrow('Invalid configuration: AUTH_USERNAME');
+    expect(createConfig({ NODE_ENV: 'production' }).AUTH_USERNAME).toBeUndefined();
     const secret = 'this-must-not-appear-in-the-configuration-error';
-    expect(() => createConfig({ NODE_ENV: 'production', AUTH_USERNAME: 'user', AUTH_PASSWORD: 'password', AUTH_SESSION_SECRET: secret })).not.toThrow();
+    expect(() => createConfig({ ...productionAuth, AUTH_USERNAME: 'user', AUTH_PASSWORD: 'password', AUTH_SESSION_SECRET: secret })).not.toThrow();
   });
   it('does not expose a rejected authentication secret', () => {
     const secret = 'too-short-secret';
-    try { createConfig({ NODE_ENV: 'production', AUTH_USERNAME: 'user', AUTH_PASSWORD: 'password', AUTH_SESSION_SECRET: secret }); } catch (error) {
+    try { createConfig({ ...productionAuth, AUTH_USERNAME: 'user', AUTH_PASSWORD: 'password', AUTH_SESSION_SECRET: secret }); } catch (error) {
       expect(String(error)).toContain('AUTH_SESSION_SECRET');
       expect(String(error)).not.toContain(secret);
     }

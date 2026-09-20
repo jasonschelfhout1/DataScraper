@@ -1,92 +1,32 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { FormEvent, ReactElement } from 'react';
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import { api, ApiError } from './api';
-import { filterDocuments, formatSize } from './filter';
-import type { Document, DownloadJob, Project } from './types';
+import { formatSize } from './filter';
+import type { ArchiveDocument, ArchiveProject, ArchiveStats } from './types';
 
 interface ScraperAppProps { username: string; onLogout: () => Promise<void> }
 
-function messageFor(error: unknown): string {
-  if (error instanceof ApiError && error.code === 'DISCOVERY_REQUIRED') return 'The public API mapping has not been confirmed yet. Run the authorized discovery workflow before searching.';
-  return error instanceof Error ? error.message : 'An unexpected error occurred.';
-}
-
 export default function ScraperApp({ username, onLogout }: ScraperAppProps) {
-  const [input, setInput] = useState('');
-  const [project, setProject] = useState<Project>();
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('All');
+  const [projects, setProjects] = useState<ArchiveProject[]>([]);
+  const [selected, setSelected] = useState<ArchiveProject>();
+  const [documents, setDocuments] = useState<ArchiveDocument[]>([]);
+  const [stats, setStats] = useState<ArchiveStats>();
   const [loading, setLoading] = useState(false);
-  const [discovering, setDiscovering] = useState(false);
   const [error, setError] = useState<string>();
-  const [job, setJob] = useState<DownloadJob>();
 
-  const visible = useMemo(() => filterDocuments(documents, query, category), [documents, query, category]);
-  const categories = useMemo(() => ['All', ...Array.from(new Set(documents.map((document) => document.category ?? 'Other'))).sort()], [documents]);
-  const selectableVisible = visible.filter((document) => document.downloadable);
-
-  useEffect(() => {
-    if (!job || job.status !== 'running') return;
-    const events = new EventSource(`/api/downloads/${job.id}/events`);
-    events.onmessage = (event) => setJob(JSON.parse(event.data) as DownloadJob);
-    events.onerror = () => events.close();
-    return () => events.close();
-  }, [job?.id, job?.status]);
-
-  async function search(event: FormEvent): Promise<void> {
-    event.preventDefault();
-    if (!input.trim()) return;
-    setLoading(true); setDiscovering(false); setError(undefined); setProject(undefined); setDocuments([]); setSelected(new Set()); setJob(undefined);
-    try {
-      const foundProject = await api.project(input.trim());
-      setProject(foundProject);
-      setDiscovering(true);
-      setDocuments(await api.documents(foundProject.projectNumber));
-    } catch (cause) {
-      setError(messageFor(cause));
-    } finally {
-      setLoading(false); setDiscovering(false);
-    }
-  }
-  function toggle(id: string): void {
-    setSelected((previous) => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  }
-  function toggleVisible(): void {
-    const ids = selectableVisible.map((document) => document.id);
-    const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
-    setSelected((previous) => { const next = new Set(previous); ids.forEach((id) => allSelected ? next.delete(id) : next.add(id)); return next; });
-  }
-  async function download(ids = [...selected]): Promise<void> {
-    if (!project || !ids.length) return;
-    setError(undefined);
-    try { setJob(await api.startDownload(project.projectNumber, ids)); } catch (cause) { setError(messageFor(cause)); }
-  }
+  useEffect(() => { void api.archiveStatus().then(setStats).catch(() => undefined); }, []);
+  async function search(event: FormEvent): Promise<void> { event.preventDefault(); setLoading(true); setError(undefined); setSelected(undefined); setDocuments([]); try { setProjects((await api.searchArchive(query)).projects); } catch (cause) { setError(message(cause)); } finally { setLoading(false); } }
+  async function open(project: ArchiveProject): Promise<void> { setSelected(project); setLoading(true); setError(undefined); try { setDocuments(await api.archiveDocuments(project.projectNumber)); } catch (cause) { setError(message(cause)); } finally { setLoading(false); } }
 
   return <main className="shell">
-    <header className="app-header"><div><p className="eyebrow">PRIVATE DOCUMENT UTILITY</p><h1>Omgevingsloket Document Downloader</h1><p>Find and download only files that the public Inzageloket makes available.</p></div><button className="secondary logout" type="button" onClick={() => void onLogout()}>Log out {username}</button></header>
-    <form className="search" onSubmit={search}>
-      <label htmlFor="project">Project number or Omgevingsloket URL</label>
-      <div><input id="project" value={input} onChange={(event) => setInput(event.target.value)} placeholder="2026045710" autoComplete="off" /><button disabled={loading}>{loading ? 'Searching…' : 'Search project'}</button></div>
-    </form>
+    <header className="app-header"><div><p className="eyebrow">PRIVATE ARCHIVE</p><h1>Omgevingsloket Archive</h1><p>Historical copies of publicly downloadable Inzageloket documents observed by this archive. Source availability and copyright restrictions still apply.</p></div><button className="secondary logout" type="button" onClick={() => void onLogout()}>Log out {username}</button></header>
+    {stats && <section className="project archive-status"><strong>{stats.projects.toLocaleString()} projects</strong><span>{stats.archivedDocuments.toLocaleString()} archived documents</span><span>{stats.viewOnlyDocuments.toLocaleString()} view-only metadata records</span><span>{stats.paused ? `Crawler paused: ${stats.pauseReason ?? 'authorization required'}` : `${stats.pendingTasks} tasks queued`}</span></section>}
+    <form className="search" onSubmit={search}><label htmlFor="archive-search">Search project number, municipality or project name</label><div><input id="archive-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Antwerpen or 2026045710" /><button disabled={loading}>{loading ? 'Searching…' : 'Search archive'}</button></div></form>
     {error && <p className="notice error" role="alert">{error}</p>}
-    {loading && <p className="notice">Searching project…</p>}
-    {project && <section className="project"><h2>{project.title ?? `Project ${project.projectNumber}`}</h2><dl><Data label="Project number" value={project.projectNumber} /><Data label="Description" value={project.description} /><Data label="Location" value={project.address} /><Data label="Municipality" value={project.municipality} /><Data label="Status" value={project.status} /></dl></section>}
-    {discovering && <p className="notice">Discovering publicly accessible documents…</p>}
-    {project && !discovering && <section className="documents">
-      <div className="section-head"><h2>{documents.length} document{documents.length === 1 ? '' : 's'} found</h2><div className="filters"><input aria-label="Search documents" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search documents…" /><select value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((item) => <option key={item}>{item}</option>)}</select></div></div>
-      {documents.length === 0 ? <p className="notice">No publicly accessible documents were found.</p> : <>
-        <div className="table-wrap"><table><thead><tr><th><input aria-label="Select visible documents" type="checkbox" checked={selectableVisible.length > 0 && selectableVisible.every((document) => selected.has(document.id))} onChange={toggleVisible} /></th><th>Name</th><th>Category</th><th>Description</th><th>Type</th><th>Size</th><th>Actions</th></tr></thead>
-          <tbody>{visible.map((document) => <tr key={document.id}><td><input aria-label={`Select ${document.name}`} type="checkbox" disabled={!document.downloadable} checked={selected.has(document.id)} onChange={() => toggle(document.id)} /></td><td>{document.name}</td><td>{document.category ?? 'Other'}</td><td>{document.description ?? '—'}</td><td>{document.mimeType ?? '—'}</td><td>{formatSize(document.size)}</td><td className="actions">{document.viewerUrl && <a href={document.viewerUrl} target="_blank" rel="noreferrer">View</a>}{document.downloadable ? <a href={`/api/projects/${project.projectNumber}/documents/${document.id}/download`}>Download</a> : <span>View only</span>}</td></tr>)}</tbody>
-        </table></div>
-        <footer className="selection"><span>{selected.size} document{selected.size === 1 ? '' : 's'} selected</span><div><button className="secondary" type="button" onClick={() => setSelected(new Set())}>Clear selection</button><button className="secondary" type="button" onClick={() => download(documents.filter((document) => document.downloadable).map((document) => document.id))}>Download all</button><button type="button" onClick={() => download()} disabled={!selected.size}>Download selected</button></div></footer>
-      </>}
-    </section>}
-    {job && <section className="job"><h2>{job.status === 'running' ? `Downloading ${job.completed} / ${job.total}` : job.status === 'completed' ? 'Archive ready' : 'Archive failed'}</h2><p>Downloaded: {job.completed - job.failures.length} · Failed: {job.failures.length}</p>{job.downloadUrl && <a className="button-link" href={job.downloadUrl}>Download ZIP</a>}{job.failures.length > 0 && <button type="button" onClick={() => download(job.failures.map((failure) => failure.documentId))}>Retry failed documents</button>}</section>}
+    {projects.length > 0 && <section className="documents"><h2>Archive results</h2>{projects.map((project) => <button type="button" className="archive-result" key={project.id} onClick={() => void open(project)}><strong>{project.projectNumber}</strong><span>{project.title ?? 'Untitled project'}</span><span>{project.municipality ?? 'Municipality unavailable'}</span><small>Last seen {new Date(project.lastSeenAt).toLocaleDateString()} · {project.documentCount ?? 0} documents</small></button>)}</section>}
+    {selected && <section className="documents"><h2>{selected.title ?? `Project ${selected.projectNumber}`}</h2><p>{selected.isCurrentlyPublic ? 'Currently observed as public' : 'No longer observed as public'} · First seen {new Date(selected.firstSeenAt).toLocaleDateString()} · Last synchronized {selected.lastCrawledAt ? new Date(selected.lastCrawledAt).toLocaleString() : 'not yet crawled'}</p>{documents.length === 0 ? <p className="notice">No documents are archived for this project yet.</p> : <div className="table-wrap"><table><thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{documents.map((document) => <tr key={document.id}><td>{document.filename}</td><td>{document.category ?? 'Other'}</td><td>{document.mimeType ?? '—'}</td><td>{formatSize(document.sizeBytes)}</td><td>{document.downloadStatus}</td><td>{document.downloadable && document.downloadStatus === 'downloaded' ? <a href={`/api/archive/documents/${document.id}/download`}>Download</a> : document.viewerUrl ? <a href={document.viewerUrl} target="_blank" rel="noreferrer">View at source</a> : <span>View only</span>}</td></tr>)}</tbody></table></div>}</section>}
   </main>;
 }
 
-function Data({ label, value }: { label: string; value?: string }): ReactElement | null {
-  return value ? <><dt>{label}</dt><dd>{value}</dd></> : null;
-}
+function message(error: unknown): string { if (error instanceof ApiError && error.code === 'NOT_FOUND') return 'This project is not archived yet. Searching never triggers a live Omgevingsloket request.'; return error instanceof Error ? error.message : 'The archive could not be queried.'; }

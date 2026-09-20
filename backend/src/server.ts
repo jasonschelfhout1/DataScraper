@@ -6,11 +6,13 @@ import express from 'express';
 import pino from 'pino';
 import { createApp } from './app.js';
 import { config } from './config.js';
-import { HttpOmgevingsloketProvider } from './omgevingsloket/http-provider.js';
+import { databasePool } from './db/client.js';
+import { PgArchiveRepository } from './db/repositories/archive-repository.js';
+import { R2ObjectStore } from './storage/object-store.js';
 
 const shutdownTimeoutMs = 10_000;
 const logger = pino({ level: config.LOG_LEVEL });
-const app = createApp(new HttpOmgevingsloketProvider(), logger);
+const app = createApp(new PgArchiveRepository(databasePool()), new R2ObjectStore(), logger);
 const here = dirname(fileURLToPath(import.meta.url));
 const frontend = resolve(here, '../../frontend/dist');
 if (existsSync(frontend)) {

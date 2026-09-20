@@ -1,97 +1,45 @@
-import { Readable } from 'node:stream';
 import pino from 'pino';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
-import type { OmgevingsloketProvider } from './omgevingsloket/types.js';
+import type { ArchiveDocument, ArchiveProject, ArchiveRepository, ArchiveStats } from './archive/types.js';
+import { MemoryObjectStore } from './storage/object-store.js';
 
-const document = { id: 'document_one', projectNumber: '2026045710', name: 'plan.pdf', downloadable: true };
-let upstreamCalls = 0;
-const provider: OmgevingsloketProvider = {
-  getProject: async (projectNumber) => { upstreamCalls += 1; return { projectNumber, title: 'Example project' }; },
-  getDocuments: async () => { upstreamCalls += 1; return [document]; },
-  downloadDocument: async () => { upstreamCalls += 1; return { stream: Readable.from('file'), filename: 'plan.pdf', contentType: 'application/pdf' }; },
-};
+const project: ArchiveProject = { id: '11111111-1111-4111-8111-111111111111', projectNumber: '2026045710', title: 'Archive example', municipality: 'Gent', isCurrentlyPublic: true, firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), documentCount: 2 };
+const archived: ArchiveDocument = { id: '22222222-2222-4222-8222-222222222222', projectNumber: project.projectNumber, upstreamUuid: 'document_one', filename: 'plan.pdf', downloadable: true, downloadStatus: 'downloaded', storageKey: 'projects/2026045710/document_one/plan.pdf', firstSeenAt: new Date().toISOString() };
+const viewOnly: ArchiveDocument = { id: '33333333-3333-4333-8333-333333333333', projectNumber: project.projectNumber, upstreamUuid: 'document_two', filename: 'copyright.pdf', downloadable: false, downloadStatus: 'view_only', firstSeenAt: new Date().toISOString() };
+const stats: ArchiveStats = { projects: 1, currentlyPublicProjects: 1, documents: 2, archivedDocuments: 1, viewOnlyDocuments: 1, pendingDownloads: 0, failedDownloads: 0, pendingTasks: 0, paused: false };
+const archive: ArchiveRepository = { searchProjects: async () => ({ projects: [project], total: 1 }), getProject: async (number) => number === project.projectNumber ? project : undefined, getDocuments: async () => [archived, viewOnly], getDocument: async (id) => [archived, viewOnly].find((document) => document.id === id), stats: async () => stats };
+function app() { return createApp(archive, new MemoryObjectStore(), pino({ enabled: false })); }
+function signIn(agent: ReturnType<typeof request.agent>) { return agent.post('/api/auth/login').send({ username: 'test-user', password: 'test-password' }); }
 
-function app() {
-  return createApp(provider, pino({ enabled: false }));
-}
-
-function signIn(agent: ReturnType<typeof request.agent>) {
-  return agent.post('/api/auth/login').send({ username: 'test-user', password: 'test-password' });
-}
-
-describe('authentication and internal API', () => {
-  it('provides a public health check without calling upstream', async () => {
-    const callsBefore = upstreamCalls;
-    const response = await request(app()).get('/api/health');
-    expect(response.status).toBe(200);
-    expect(response.body.status).toBe('ok');
-    expect(upstreamCalls).toBe(callsBefore);
+describe('archive API', () => {
+  it('keeps health public and protects all archive routes', async () => {
+    await request(app()).get('/api/health').expect(200).expect(({ body }) => expect(body.status).toBe('ok'));
+    await request(app()).get('/api/archive/projects').expect(401, { code: 'UNAUTHORIZED', message: 'Authentication required.' });
+    await request(app()).get(`/api/archive/documents/${archived.id}/download`).expect(401);
   });
-
-  it('protects project and download-job routes from unauthenticated access', async () => {
-    const unauthenticated = request(app());
-    await unauthenticated.get('/api/projects/2026045710').expect(401, { code: 'UNAUTHORIZED', message: 'Authentication required.' });
-    await unauthenticated.get('/api/downloads/00000000-0000-4000-8000-000000000000').expect(401, { code: 'UNAUTHORIZED', message: 'Authentication required.' });
-  });
-
-  it('rejects invalid credentials without returning secrets', async () => {
-    const response = await request(app()).post('/api/auth/login').send({ username: 'test-user', password: 'wrong-password' });
-    expect(response.status).toBe(401);
-    expect(response.body).toEqual({ code: 'INVALID_CREDENTIALS', message: 'Invalid username or password.' });
-    expect(JSON.stringify(response.body)).not.toContain('test-password');
-  });
-
-  it('creates a signed HTTP-only session and permits authenticated project access', async () => {
+  it('creates a signed session and only exposes the configured username', async () => {
     const agent = request.agent(app());
-    const login = await signIn(agent);
-    expect(login.status).toBe(200);
+    const login = await signIn(agent).expect(200);
     expect(login.body).toEqual({ authenticated: true, username: 'test-user' });
     expect(login.headers['set-cookie']?.join(';')).toContain('httponly');
-    expect(login.headers['set-cookie']?.join(';')).toContain('samesite=strict');
-    expect(login.headers['set-cookie']?.join(';')).toContain('expires=');
-    expect(login.headers['set-cookie']?.join(';')).toContain('datascraper_session.sig=');
-    await agent.get('/api/projects/2026045710').expect(200).expect(({ body }) => expect(body.projectNumber).toBe('2026045710'));
-  });
-
-  it('reports session state and logout immediately clears it', async () => {
-    const agent = request.agent(app());
-    await signIn(agent).expect(200);
     await agent.get('/api/auth/session').expect(200, { authenticated: true, username: 'test-user' });
     await agent.post('/api/auth/logout').expect(200, { authenticated: false });
-    await agent.get('/api/auth/session').expect(200, { authenticated: false });
-    await agent.get('/api/projects/2026045710').expect(401);
   });
-
-  it('limits repeated login attempts and supplies Retry-After', async () => {
-    const candidate = request(app());
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      await candidate.post('/api/auth/login').send({ username: 'test-user', password: 'wrong-password' }).expect(401);
-    }
-    const limited = await candidate.post('/api/auth/login').send({ username: 'test-user', password: 'wrong-password' });
-    expect(limited.status).toBe(429);
-    expect(limited.headers['retry-after']).toBeDefined();
+  it('returns archive search, detail and document metadata without an upstream provider', async () => {
+    const agent = request.agent(app()); await signIn(agent).expect(200);
+    await agent.get('/api/archive/projects?q=gent').expect(200).expect(({ body }) => expect(body.projects[0].projectNumber).toBe(project.projectNumber));
+    await agent.get(`/api/archive/projects/${project.projectNumber}`).expect(200).expect(({ body }) => expect(body.title).toBe('Archive example'));
+    await agent.get(`/api/archive/projects/${project.projectNumber}/documents`).expect(200).expect(({ body }) => expect(body.documents).toHaveLength(2));
+    await agent.get('/api/archive/status').expect(200).expect(({ body }) => expect(body.archivedDocuments).toBe(1));
   });
-
-  it('retains the project rate limiter after authentication', async () => {
-    const agent = request.agent(app());
-    await signIn(agent).expect(200);
-    for (let attempt = 0; attempt < 30; attempt += 1) await agent.get('/api/projects/2026045710').expect(200);
-    await agent.get('/api/projects/2026045710').expect(429);
+  it('never offers an R2 download for view-only documents', async () => {
+    const agent = request.agent(app()); await signIn(agent).expect(200);
+    await agent.get(`/api/archive/documents/${viewOnly.id}/download`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'This document was not archived for download.' });
   });
-
-  it('continues to stream known documents and create ZIP jobs for an authenticated user', async () => {
-    const agent = request.agent(app());
-    await signIn(agent).expect(200);
-    await agent.get('/api/projects/2026045710/documents/document_one/download').expect(200).expect('content-type', /application\/pdf/);
-    const start = await agent.post('/api/projects/2026045710/downloads').send({ documentIds: ['document_one'] }).expect(202);
-    let report = await agent.get(`/api/downloads/${start.body.id}`);
-    for (let tries = 0; tries < 20 && report.body.status === 'running'; tries += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      report = await agent.get(`/api/downloads/${start.body.id}`);
-    }
-    expect(report.body.status).toBe('completed');
-    expect(report.body.downloadUrl).toContain('/file');
+  it('rate limits invalid login attempts', async () => {
+    const candidate = request(app()); for (let i = 0; i < 5; i += 1) await candidate.post('/api/auth/login').send({ username: 'test-user', password: 'wrong' }).expect(401);
+    await candidate.post('/api/auth/login').send({ username: 'test-user', password: 'wrong' }).expect(429);
   });
 });

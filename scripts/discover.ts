@@ -3,12 +3,14 @@ import { resolve } from 'node:path';
 import { chromium, type BrowserContext, type Request, type Response } from 'playwright';
 import { parseProjectInput } from '../backend/src/validation.js';
 
-const rawInput = process.argv.slice(2).find((value) => !value.startsWith('--'));
-if (!rawInput) throw new Error('Usage: npm run discover -- <project number or official project URL> [--har]');
-const projectNumber = parseProjectInput(rawInput);
+const args = process.argv.slice(2).filter((value) => !value.startsWith('--'));
+const mode = args[0] === 'search' ? 'search' : args[0] === 'content' ? 'content' : args[0] === 'project' ? 'project' : 'project';
+const rawInput = mode === 'search' ? undefined : args[args[0] === mode ? 1 : 0];
+if (mode !== 'search' && !rawInput) throw new Error('Usage: npm run discover -- project <project> [--har] | search [--har] | content <project> [--har]');
+const projectNumber = rawInput ? parseProjectInput(rawInput) : undefined;
 const createHar = process.argv.includes('--har');
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-const outputDirectory = resolve(process.cwd(), 'debug', 'discovery', `${projectNumber}-${timestamp}`);
+const outputDirectory = resolve(process.cwd(), 'debug', 'discovery', `${mode}-${projectNumber ?? 'start'}-${timestamp}`);
 const redactedHeaders = new Set(['authorization', 'cookie', 'set-cookie', 'proxy-authorization', 'x-api-key']);
 const seen = new Set<string>();
 
@@ -42,7 +44,12 @@ async function writeJson(name: string, value: unknown): Promise<void> {
   await writeFile(resolve(outputDirectory, name), JSON.stringify(redact(value), null, 2), 'utf8');
 }
 async function waitForEnter(): Promise<void> {
-  process.stdout.write('\nComplete the official verification and open the project sections/documents you need captured. Press Enter here when finished.\n');
+  const instructions = mode === 'search'
+    ? 'Complete official verification, then manually search a municipality, paginate results, change publication/authority filters, and pan or zoom the map.'
+    : mode === 'content'
+      ? 'Complete official verification, then open Inhoud aanvraag, a stedenbouwkundige handeling, Plannen en foto\'s, Detailinformatie, and one legitimately downloadable file.'
+      : 'Complete official verification and open the project sections/documents you need captured.';
+  process.stdout.write(`\n${instructions} Press Enter here when finished.\n`);
   await new Promise<void>((resolveEnter) => process.stdin.once('data', () => resolveEnter()));
 }
 async function sanitizeHar(path: string): Promise<void> {
@@ -67,14 +74,14 @@ try {
   });
   page.on('response', (response) => { void captureResponse(response, seen.size); });
   page.on('download', (download) => { void writeJson(`download-${Date.now()}.json`, { url: download.url(), suggestedFilename: download.suggestedFilename() }); });
-  await page.goto(`https://omgevingsloketinzage.omgeving.vlaanderen.be/${projectNumber}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.goto(`https://omgevingsloketinzage.omgeving.vlaanderen.be/${projectNumber ?? ''}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await waitForEnter();
 } finally {
   await context?.close();
   await browser.close();
 }
 if (createHar) await sanitizeHar(harPath);
-await writeJson('summary.json', { projectNumber, capturedAt: new Date().toISOString(), uniqueRequests: seen.size, har: createHar ? 'network.har (headers redacted; response bodies omitted)' : undefined });
+await writeJson('summary.json', { mode, ...(projectNumber ? { projectNumber } : {}), capturedAt: new Date().toISOString(), uniqueRequests: seen.size, har: createHar ? 'network.har (headers redacted; response bodies omitted)' : undefined });
 console.log(`Discovery evidence written to ${outputDirectory}`);
 
 async function captureResponse(response: Response, sequence: number): Promise<void> {

@@ -13,6 +13,10 @@ services:
         value: "false"
       - key: LOCAL_DATA_DIR
         value: /tmp/datascraper
+      - key: DATABASE_URL
+        fromDatabase:
+          name: datascraper-db
+          property: connectionString
       - key: LOG_LEVEL
         value: info
       - key: AUTH_USERNAME
@@ -23,3 +27,43 @@ services:
         sync: false
       - key: OMGEVINGSLOKET_COOKIE_HEADER
         sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+  - type: cron
+    name: datascraper-crawler
+    runtime: node
+    schedule: "*/15 * * * *"
+    buildCommand: npm ci && npm run build
+    startCommand: npm run crawl:once
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: datascraper-db
+          property: connectionString
+      - key: AUTH_USERNAME
+        sync: false
+      - key: AUTH_PASSWORD
+        sync: false
+      - key: AUTH_SESSION_SECRET
+        sync: false
+      - key: OMGEVINGSLOKET_COOKIE_HEADER
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+databases:
+  - name: datascraper-db
+    plan: basic-256mb

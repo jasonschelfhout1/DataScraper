@@ -1,30 +1,30 @@
-export interface Project {
-  projectNumber: string;
-  title?: string;
-  description?: string;
-  address?: string;
-  municipality?: string;
-  status?: string;
-}
-
-export interface Document {
+export interface ArchiveProject {
   id: string;
   projectNumber: string;
-  name: string;
+  title?: string;
+  municipality?: string;
+  status?: string;
+  isCurrentlyPublic: boolean;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastCrawledAt?: string;
+  documentCount?: number;
+}
+
+export interface ArchiveDocument {
+  id: string;
+  projectNumber: string;
+  upstreamUuid: string;
+  filename: string;
   description?: string;
   category?: string;
   mimeType?: string;
-  size?: number;
+  sizeBytes?: number;
   viewerUrl?: string;
   downloadable: boolean;
+  downloadStatus: string;
+  storageKey?: string;
+  firstSeenAt: string;
 }
 
-export interface DownloadJob {
-  id: string;
-  projectNumber: string;
-  status: 'running' | 'completed' | 'failed';
-  total: number;
-  completed: number;
-  failures: Array<{ documentId: string; name: string; message: string }>;
-  downloadUrl?: string;
-}
+export interface ArchiveStats { projects: number; currentlyPublicProjects: number; documents: number; archivedDocuments: number; viewOnlyDocuments: number; pendingDownloads: number; failedDownloads: number; pendingTasks: number; paused: boolean; pauseReason?: string; lastSuccessfulUpstreamRequestAt?: string }

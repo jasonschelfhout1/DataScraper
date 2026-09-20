@@ -1,84 +1,90 @@
-# Omgevingsloket Document Downloader
+# Omgevingsloket Archive
 
-A small service for listing and downloading documents that the Flemish Omgevingsloket Inzageloket publicly makes available. It is not a general web proxy and never bypasses access restrictions, authentication, CAPTCHA, anti-bot verification, disabled downloads, watermarks, or viewer-only decisions.
+An authenticated, archive-first utility for documents that the Flemish Omgevingsloket Inzageloket has made publicly downloadable. Normal users search PostgreSQL-backed archive data; browser requests never cause live Omgevingsloket traffic.
 
-## Status and upstream discovery
+The archive grows as the crawler observes currently public projects. It cannot guarantee recovery of historical projects that disappeared before the crawler saw them. Copyright/view-only files are stored only as metadata; no viewer rendering, watermark removal, or download restriction bypass is attempted.
 
-The HTTP provider is based only on a user-authorized network capture of the public Inzageloket. It follows project → phase → event → file relationships, identifies files marked `PUBLIEK_DOWNLOAD`, and downloads only those files. See [the confirmed API record](docs/omgevingsloket-api.md).
+## Architecture
 
-## Install and run locally
+- PostgreSQL holds project/document metadata, provenance, archive status, crawler queue, leases, and pause state.
+- Private Cloudflare R2 holds only legitimately downloadable (`PUBLIEK_DOWNLOAD`) binaries.
+- The crawler is the sole live Omgevingsloket client. It is slow, concurrency-one, resumable, and pauses if manual visitor verification expires.
+- Express serves authenticated archive APIs and generates short-lived R2 download links. React never receives R2 write credentials or the Omgevingsloket session cookie.
 
-Requires Node.js 22–25 and npm. From the repository root:
+See [archive architecture](docs/archive-architecture.md), [crawler](docs/crawler.md), [storage](docs/storage.md), and [confirmed upstream API evidence](docs/omgevingsloket-api.md).
+
+## Local setup
+
+Requires Node.js 22–25, Docker (optional PostgreSQL convenience), and a private R2 bucket.
 
 ```powershell
-npm install
-npx playwright install chromium
 Copy-Item .env.example .env
-npm run dev
+docker compose up -d postgres
+npm ci
+npm run db:migrate
 ```
 
-Open `http://localhost:5173`. Vite proxies `/api` to Express at port 3001. For a local production check, run `npm run build` followed by `npm start`; Express serves the built frontend and API.
+Set in `.env`: `DATABASE_URL`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `AUTH_SESSION_SECRET`, and the R2 variables. Generate the session secret with `openssl rand -base64 48`. `.env` must never be committed.
 
-## Authentication
+Run the web app with `npm run dev`. It displays a login screen, then searches the local archive. `GET /api/health` remains public; archive APIs require the signed HTTP-only session cookie. Login attempts and authenticated API use remain rate-limited.
 
-This is intentionally a single-user/shared-credential utility. Before running it locally, create `.env` from `.env.example` and set `AUTH_USERNAME`, `AUTH_PASSWORD`, and `AUTH_SESSION_SECRET`. Generate the session secret with:
-
-```bash
-openssl rand -base64 48
-```
-
-The application stores only a signed, HTTP-only session cookie for about 24 hours; it never places the password, application secrets, or the Omgevingsloket cookie in the React bundle or browser storage. The login endpoint has a separate five-attempts-per-15-minutes IP limit. Existing project request limits remain active after login. `GET /api/health` stays public for Render, while scraper and download APIs require a valid session.
-
-Never commit `.env`. On Render, configure `AUTH_USERNAME`, `AUTH_PASSWORD`, and `AUTH_SESSION_SECRET` as secrets along with `OMGEVINGSLOKET_COOKIE_HEADER`.
-
-## Deploy on Render
-
-This repository is ready for one Render Web Service. Commit [render.yaml](render.yaml), push to GitHub, then create a **Blueprint** in Render and select the repository. The Blueprint builds with `npm ci && npm run build`, starts with `npm start`, and checks `GET /api/health`; Render supplies `PORT` automatically.
-
-Set `OMGEVINGSLOKET_COOKIE_HEADER` as a Render **secret** (it is deliberately marked `sync: false` in the Blueprint). Its value is the complete, currently verified `Cookie` request-header value from your own authorized browser session, for example `name=value; other=value`. Do not paste it into the repository, GitHub Actions logs, issues, or browser/client settings. It takes precedence over the local `.local/omgevingsloket-session.json` file.
-
-Rotate this secret by re-running `npm run authorize` locally, completing the official browser verification yourself, obtaining a current cookie-header value, updating the Render secret, and redeploying. If it expires or is rejected, the service returns an actionable upstream error and does not attempt to defeat verification.
-
-The service uses `/tmp/datascraper` on Render for temporary ZIP archives. Render's filesystem is ephemeral, so archives and any local browser session disappear on restart. Run a single service instance: ZIP job state and the conservative request limiter are intentionally in-memory.
-
-## Authorize and discover
-
-The local browser session is an explicit, normal visitor session. It is not shared, committed, or used to solve verification automatically.
+## Crawler and discovery
 
 ```powershell
-# Opens a visible browser. Complete the official check, then press Enter here.
+# Manual, visible official verification only
 npm run authorize -- 2026045710
 
-# Captures real project/document traffic while you navigate the official UI.
-npm run discover -- 2026045710 --har
+# Confirm a known project traversal
+npm run discover -- project 2026045710 --har
+
+# Required before global discovery can be implemented
+npm run discover -- search --har
+
+# Required before Inhoud aanvraag files can be archived
+npm run discover -- content 2026045710 --har
+
+# Known-project archive crawl; normal users cannot trigger it
+npm run crawl:project -- 2026045710
+npm run crawl:once
+npm run crawl:status
+# After a fresh manual authorization if crawler status says paused
+npm run crawl:resume
 ```
 
-`discover` accepts a 10-digit number, its optional `OMV_` prefix, or an exact `https://omgevingsloketinzage.omgeving.vlaanderen.be/<number>` URL. It records sanitized JSON metadata and, when requested, a sanitized HAR with response bodies omitted below `debug/discovery/`. Do not commit those artifacts. The local session cookie file is mode-restricted under `.local/` and must be renewed when it expires.
+`discover -- search` requires you to manually search a municipality, paginate, adjust publication/authority filters, and pan/zoom the map. `discover -- content` requires manually opening the content branches and a legitimately downloadable file. Sanitized evidence is written under ignored `debug/discovery/`; do not guess routes from UI labels.
 
-The confirmed provider is isolated in `backend/src/omgevingsloket/`. If Vlaanderen changes the external API, re-run discovery, update the API record, and change only this integration layer. In deployed environments, update the secret only after a user completes the official verification; never automate or bypass it.
+Global discovery is deliberately unsupported until that capture proves an official finite enumeration endpoint. The known event traversal is confirmed; the `Inhoud aanvraag` nested relationship is only partially confirmed.
 
-## Architecture and safety
+## R2 and deployment
 
-- `frontend/`: React, TypeScript, Vite, native `fetch`, and responsive CSS. The browser knows only the local `/api` contract.
-- `backend/`: Express API, input/SSRF validation, metadata cache, allowlisted HTTP client, local session store, structured logging, and ZIP download jobs with Server-Sent Event progress.
-- `scripts/`: headed Playwright discovery and official-session authorization. Playwright is not the normal download mechanism.
+Create a **private** Cloudflare R2 bucket, preferably in an EU jurisdiction, and create an S3 API token limited to that bucket. Configure `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`, and `R2_REGION=auto`. The bucket is never public.
 
-The internal API is `GET /api/projects/:projectNumber`, `GET /api/projects/:projectNumber/documents`, an individual document download route, and bulk ZIP jobs (`POST /api/projects/:projectNumber/downloads`, status/events/file routes). Document IDs are opaque and downloads are always rechecked against the server-side listing.
+The Render Blueprint defines a web service, PostgreSQL database, and a 15-minute bounded crawler cron. Configure these Render secrets on the web service and crawler as applicable:
 
-Only the configured exact official HTTPS hostname is permitted. User input is normalized to a project number; it is never treated as a target URL. The HTTP client has a timeout, conservative concurrency, bounded transient retries, and no binary-file cache.
+```text
+AUTH_USERNAME
+AUTH_PASSWORD
+AUTH_SESSION_SECRET
+OMGEVINGSLOKET_COOKIE_HEADER
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+R2_BUCKET
+R2_ENDPOINT
+```
 
-Set `DEBUG_OMGEVINGSLOKET=true` only when investigating a confirmed provider to log safe request metadata. Cookies, authorization values, request headers, and binary bodies are not logged. Request logs deliberately contain only method, path, remote address, and status.
+Run `npm run db:migrate` once against the Render PostgreSQL `DATABASE_URL` before enabling the crawler. The cron uses `npm run crawl:once`; use `npm run crawl:worker` only for a deliberate future Background Worker deployment, never alongside the cron without operational review.
 
-`MAX_ACTIVE_DOWNLOAD_JOBS`, `MAX_DOCUMENTS_PER_DOWNLOAD`, and the `EXPENSIVE_REQUEST_*` variables protect the public service from expensive work. `LOCAL_DATA_DIR` defaults to `.local` locally and should be `/tmp/datascraper` on Render. Invalid configuration fails closed at startup without including a secret value in the error.
+## Safety and troubleshooting
 
-## Validation and troubleshooting
+The crawler keeps durable task state in PostgreSQL. It uses leases and `SKIP LOCKED` claiming so an interrupted batch resumes safely. A verification failure pauses crawler traffic while retaining pending tasks; complete the official verification manually, update the secret/session, and resume later.
+
+The provider uses only confirmed official HTTPS endpoints, strict host validation, typed response parsing, and no brute force project-number enumeration. It does not access personal/citizen areas. See the upstream record for confirmed, partially confirmed, and unknown routes.
+
+## Validation
 
 ```powershell
 npm test
-# Manual only; uses your currently authorized session:
+npm run build
+# Manual live check only after authorization:
 npm run test:integration -- 2026045710
 ```
-
-Tests make no live government requests. They cover input and host validation, safe/duplicate filenames, cache expiry, filtering, cookie source precedence, no-proxy boundaries, download headers, ZIP job behavior, and the health endpoint.
-
-If upstream retrieval breaks, first verify the authorized session in a visible browser, then run `discover` again and compare the sanitized evidence with [the confirmed API record](docs/omgevingsloket-api.md). Do not guess at replacement endpoints or weaken host, cookie, or document-access checks.

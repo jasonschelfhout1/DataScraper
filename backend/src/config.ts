@@ -31,6 +31,20 @@ const envSchema = z.object({
   AUTH_SESSION_MAX_AGE_MS: z.coerce.number().int().min(60_000).max(604_800_000).default(86_400_000),
   AUTH_LOGIN_WINDOW_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
   AUTH_MAX_LOGIN_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  DATABASE_URL: z.string().url().optional(),
+  R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  R2_BUCKET: z.string().min(3).max(255).optional(),
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_REGION: z.string().min(1).default('auto'),
+  CRAWLER_CONCURRENCY: z.coerce.number().int().min(1).max(1).default(1),
+  CRAWLER_MIN_REQUEST_DELAY_MS: z.coerce.number().int().min(1_000).max(60_000).default(3_000),
+  CRAWLER_REQUEST_JITTER_MS: z.coerce.number().int().min(0).max(30_000).default(2_000),
+  CRAWLER_BATCH_MAX_MS: z.coerce.number().int().min(60_000).max(1_800_000).default(480_000),
+  CRAWLER_MAX_TASKS_PER_RUN: z.coerce.number().int().min(1).max(5_000).default(500),
+  CRAWLER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  CRAWLER_TASK_LEASE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
+  CRAWLER_RETRY_BASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
   LOCAL_DATA_DIR: z.string().trim().min(1).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
@@ -43,11 +57,6 @@ export function createConfig(environment: NodeJS.ProcessEnv) {
     const key = String(parsed.error.issues[0]?.path[0] ?? 'environment');
     throw new Error(`Invalid configuration: ${key}`);
   }
-  if (parsed.data.NODE_ENV !== 'test') {
-    for (const key of ['AUTH_USERNAME', 'AUTH_PASSWORD', 'AUTH_SESSION_SECRET'] as const) {
-      if (!parsed.data[key]) throw new Error(`Invalid configuration: ${key}`);
-    }
-  }
   const baseUrl = new URL(parsed.data.OMGEVINGSLOKET_BASE_URL);
   return {
     ...parsed.data,
@@ -59,4 +68,21 @@ export function createConfig(environment: NodeJS.ProcessEnv) {
   };
 }
 
+export function requireObjectStorageConfig() {
+  const required = ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET', 'R2_ENDPOINT'] as const;
+  for (const key of required) if (!config[key]) throw new Error(`Invalid configuration: ${key}`);
+  return {
+    accessKeyId: config.R2_ACCESS_KEY_ID!, secretAccessKey: config.R2_SECRET_ACCESS_KEY!,
+    bucket: config.R2_BUCKET!, endpoint: config.R2_ENDPOINT!, region: config.R2_REGION,
+  };
+}
+
 export const config = createConfig(process.env);
+
+/** Called only by the web server; crawler/discovery tools do not need app-login credentials. */
+export function requireAuthenticationConfig() {
+  for (const key of ['AUTH_USERNAME', 'AUTH_PASSWORD', 'AUTH_SESSION_SECRET'] as const) {
+    if (!config[key]) throw new Error(`Invalid configuration: ${key}`);
+  }
+  return { username: config.AUTH_USERNAME!, password: config.AUTH_PASSWORD!, sessionSecret: config.AUTH_SESSION_SECRET! };
+}

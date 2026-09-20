@@ -1,0 +1,2 @@
+import { closeDatabase, databasePool } from '../backend/src/db/client.js';
+try { await databasePool().query(`INSERT INTO crawler_state (id, paused, pause_reason, last_heartbeat_at) VALUES (1, false, NULL, now()) ON CONFLICT (id) DO UPDATE SET paused=false, pause_reason=NULL, last_heartbeat_at=now()`); console.log('Crawler resumed. Run this only after manually renewing official authorization.'); } finally { await closeDatabase(); }

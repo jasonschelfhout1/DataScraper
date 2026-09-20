@@ -1,10 +1,10 @@
-import type { Document } from './types';
+interface FilterableDocument { name?: string; filename?: string; description?: string; category?: string }
 
-export function filterDocuments(documents: Document[], text: string, category: string): Document[] {
+export function filterDocuments<T extends FilterableDocument>(documents: T[], text: string, category: string): T[] {
   const query = text.trim().toLocaleLowerCase();
   return documents.filter((document) => {
     const inCategory = category === 'All' || (document.category ?? 'Other') === category;
-    const haystack = [document.name, document.description, document.category].filter(Boolean).join(' ').toLocaleLowerCase();
+    const haystack = [document.name ?? document.filename, document.description, document.category].filter(Boolean).join(' ').toLocaleLowerCase();
     return inCategory && (!query || haystack.includes(query));
   });
 }

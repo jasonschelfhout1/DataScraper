@@ -52,7 +52,8 @@ export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
     try {
       const header = headerSchema.parse(await this.json(`/projecten/header?projectnummer=${encodeURIComponent(projectNumber)}`));
       const procedure = z.array(phaseSchema).parse(await this.json(`/projecten/${header.uuid}/procedure`));
-      const discovered = await Promise.all(procedure.map((phase) => this.documentsForPhase(projectNumber, phase.uuid)));
+      const discovered: Document[][] = [];
+      for (const phase of procedure) discovered.push(await this.documentsForPhase(projectNumber, phase.uuid));
       const unique = new Map<string, Document>();
       discovered.flat().forEach((document) => unique.set(document.id, document));
       return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name, 'nl'));
@@ -82,13 +83,13 @@ export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
   }
 
   private async documentsForPhase(projectNumber: string, phaseId: string): Promise<Document[]> {
-    const events = (await Promise.all(eventCollections.map(async (collection) => ({
-      category: collection.category,
-      events: await this.eventsForCollection(phaseId, collection.suffix, collection.paged),
-    })))).flatMap(({ category, events }) => events.map((eventId) => ({ category, eventId })));
-    const details = await Promise.all(events.map(async ({ category, eventId }) => ({
-      category, eventId, details: z.array(eventDetailSchema).parse(await this.json(`/gebeurtenissen/${eventId}`)),
-    })));
+    const events: Array<{ category: string; eventId: string }> = [];
+    for (const collection of eventCollections) {
+      const found = await this.eventsForCollection(phaseId, collection.suffix, collection.paged);
+      events.push(...found.map((eventId) => ({ category: collection.category, eventId })));
+    }
+    const details: Array<{ category: string; eventId: string; details: z.infer<typeof eventDetailSchema>[] }> = [];
+    for (const { category, eventId } of events) details.push({ category, eventId, details: z.array(eventDetailSchema).parse(await this.json(`/gebeurtenissen/${eventId}`)) });
     return details.flatMap(({ category, eventId, details: eventDetails }) => eventDetails.flatMap((detail) =>
       (detail.bestanden ?? []).map((file) => ({
         id: file.uuid,
@@ -110,11 +111,9 @@ export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
     if (Array.isArray(first)) return extractEventIds(first);
     const page = pageSchema.parse(first);
     if (!paged || page.totalPages === undefined || page.totalPages <= 1) return extractEventIds(page.content);
-    const rest = await Promise.all(Array.from({ length: page.totalPages - 1 }, async (_, index) => {
-      const next = pageSchema.parse(await this.json(`${path}?page=${index + 1}&size=100&sort=id`));
-      return extractEventIds(next.content);
-    }));
-    return [...extractEventIds(page.content), ...rest.flat()];
+    const ids = extractEventIds(page.content);
+    for (let index = 1; index < page.totalPages; index += 1) ids.push(...extractEventIds(pageSchema.parse(await this.json(`${path}?page=${index}&size=100&sort=id`)).content));
+    return ids;
   }
 
   private json(path: string): Promise<unknown> {

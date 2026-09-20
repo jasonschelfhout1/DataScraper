@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import cookieSession from 'cookie-session';
 import { z } from 'zod';
-import { config } from './config.js';
+import { config, requireAuthenticationConfig } from './config.js';
 
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(100),
@@ -10,9 +10,10 @@ const loginSchema = z.object({
 });
 
 export function configureSession(): RequestHandler {
+  const authentication = requireAuthenticationConfig();
   return cookieSession({
     name: 'datascraper_session',
-    keys: [config.AUTH_SESSION_SECRET ?? 'test-session-secret-not-for-production'],
+    keys: [authentication.sessionSecret],
     httpOnly: true,
     secure: config.isProduction,
     sameSite: 'strict',

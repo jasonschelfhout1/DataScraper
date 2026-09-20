@@ -1,4 +1,4 @@
-import type { Document, DownloadJob, Project } from './types';
+import type { ArchiveDocument, ArchiveProject, ArchiveStats } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public readonly code?: string, public readonly status?: number) { super(message); }
@@ -29,11 +29,10 @@ export const api = {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }),
   }),
   logout: () => request<AuthSession>('/api/auth/logout', { method: 'POST' }),
-  project: (projectNumber: string) => request<Project>(`/api/projects/${encodeURIComponent(projectNumber)}`),
-  documents: async (projectNumber: string) => (await request<{ documents: Document[] }>(`/api/projects/${encodeURIComponent(projectNumber)}/documents`)).documents,
-  startDownload: (projectNumber: string, documentIds: string[]) => request<DownloadJob>(`/api/projects/${encodeURIComponent(projectNumber)}/downloads`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ documentIds }),
-  }),
+  searchArchive: (query: string, page = 0) => request<{ projects: ArchiveProject[]; total: number }>(`/api/archive/projects?q=${encodeURIComponent(query)}&page=${page}`),
+  archiveProject: (projectNumber: string) => request<ArchiveProject>(`/api/archive/projects/${encodeURIComponent(projectNumber)}`),
+  archiveDocuments: async (projectNumber: string) => (await request<{ documents: ArchiveDocument[] }>(`/api/archive/projects/${encodeURIComponent(projectNumber)}/documents`)).documents,
+  archiveStatus: () => request<ArchiveStats>('/api/archive/status'),
 };
 
 export interface AuthSession {

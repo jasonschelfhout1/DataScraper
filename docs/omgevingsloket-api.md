@@ -32,4 +32,13 @@ https://omgevingsloketinzage.omgeving.vlaanderen.be/proxy-omv-up/rs/v1/inzage
 
 The implemented provider follows every procedure phase and all four captured event collections. The capture also showed a project `inhouden` endpoint, but did not include a nested content-to-file request; it is intentionally not guessed or traversed. A later authorized capture of that UI branch is required before adding it.
 
+## Archive crawler status
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Known-project header/overview/procedure/event traversal | **CONFIRMED** | Used only by the crawler, never normal archive browsing. |
+| Event file metadata and `PUBLIEK_DOWNLOAD` binary download | **CONFIRMED** | Only this explicit category is eligible for archival. |
+| Start-page search/map project enumeration | **UNKNOWN** | Run `npm run discover -- search --har`; do not guess a route. |
+| `Inhoud aanvraag` nested content/file relationships | **PARTIALLY CONFIRMED** | The parent branch was observed, but file relationships were not captured. Run `npm run discover -- content <project> --har`. |
+
 If the session expires or the service changes, re-run `npm run authorize -- <project>` and `npm run discover -- <project> --har`, then compare the new capture with these documented contracts.
