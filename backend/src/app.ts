@@ -1,27 +1,39 @@
 import { createReadStream } from 'node:fs';
 import type { Express, NextFunction, Request, Response } from 'express';
 import express from 'express';
+import helmet from 'helmet';
 import type { Logger } from 'pino';
 import { pinoHttp } from 'pino-http';
 import { z } from 'zod';
 import { config } from './config.js';
-import { DownloadJobs } from './downloads.js';
+import { DownloadCapacityError, DownloadJobs } from './downloads.js';
 import { sanitizeFilename } from './filenames.js';
 import { DiscoveryRequiredError, UpstreamError } from './omgevingsloket/errors.js';
 import { TimedCache } from './omgevingsloket/cache.js';
 import type { Document, OmgevingsloketProvider, Project } from './omgevingsloket/types.js';
 import { documentIdSchema, InputError, parseProjectInput } from './validation.js';
+import { expensiveRequestLimiter } from './rate-limit.js';
 
-const downloadRequestSchema = z.object({ documentIds: z.array(documentIdSchema).min(1).max(250) });
+const downloadRequestSchema = z.object({ documentIds: z.array(documentIdSchema).min(1) });
 const jobIdSchema = z.string().uuid();
 
 export function createApp(provider: OmgevingsloketProvider, logger: Logger): Express {
   const app = express();
   const projects = new TimedCache<Project>(config.CACHE_TTL_MS);
   const documents = new TimedCache<Document[]>(config.CACHE_TTL_MS);
-  const jobs = new DownloadJobs(provider);
-  app.use(pinoHttp({ logger }));
+  const jobs = new DownloadJobs(provider, logger);
+  app.set('trust proxy', 1);
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+  app.use(pinoHttp({
+    logger,
+    serializers: {
+      req: (request) => ({ id: request.id, method: request.method, url: request.url, remoteAddress: request.remoteAddress }),
+      res: (response) => ({ statusCode: response.statusCode }),
+    },
+  }));
   app.use(express.json({ limit: '16kb' }));
+  app.get('/api/health', (_request, response) => response.json({ status: 'ok', service: 'datascraper', uptime: Math.floor(process.uptime()) }));
+  app.use('/api/projects', expensiveRequestLimiter(config));
 
   const projectFor = async (projectNumber: string): Promise<Project> => {
     const cached = projects.get(projectNumber);
@@ -70,6 +82,7 @@ export function createApp(provider: OmgevingsloketProvider, logger: Logger): Exp
     try {
       const projectNumber = numberFrom(request);
       const body = downloadRequestSchema.parse(request.body);
+      if (body.documentIds.length > config.MAX_DOCUMENTS_PER_DOWNLOAD) throw new DownloadLimitError(`Select at most ${config.MAX_DOCUMENTS_PER_DOWNLOAD} documents per archive.`);
       const selected = (await documentsFor(projectNumber)).filter((item) => body.documentIds.includes(item.id) && item.downloadable);
       if (!selected.length) throw new InputError('Select at least one downloadable document.');
       response.status(202).json(jobs.start(projectNumber, selected));
@@ -84,12 +97,13 @@ export function createApp(provider: OmgevingsloketProvider, logger: Logger): Exp
   });
   app.get('/api/downloads/:jobId/events', (request, response, next) => {
     try {
+      if (!jobs.get(jobIdSchema.parse(request.params.jobId))) return response.status(404).json({ code: 'NOT_FOUND', message: 'Download job not found or expired.' });
       response.setHeader('content-type', 'text/event-stream');
       response.setHeader('cache-control', 'no-cache');
       response.setHeader('connection', 'keep-alive');
       response.flushHeaders();
       const unsubscribe = jobs.subscribe(jobIdSchema.parse(request.params.jobId), (report) => response.write(`data: ${JSON.stringify(report)}\n\n`));
-      if (!unsubscribe) return response.status(404).end();
+      if (!unsubscribe) return response.status(404).json({ code: 'NOT_FOUND', message: 'Download job not found or expired.' });
       request.on('close', unsubscribe);
     } catch (error) { next(error); }
   });
@@ -104,8 +118,10 @@ export function createApp(provider: OmgevingsloketProvider, logger: Logger): Exp
       createReadStream(archivePath).pipe(response);
     } catch (error) { next(error); }
   });
+  app.use('/api', (_request, response) => response.status(404).json({ code: 'NOT_FOUND', message: 'API route not found.' }));
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    if (error instanceof DownloadLimitError || error instanceof DownloadCapacityError) return response.status(429).json({ code: 'DOWNLOAD_LIMIT', message: error.message });
     if (error instanceof InputError || error instanceof z.ZodError) return response.status(400).json({ code: 'INVALID_INPUT', message: error instanceof InputError ? error.message : 'Invalid request.' });
     if (error instanceof DiscoveryRequiredError) return response.status(503).json({ code: 'DISCOVERY_REQUIRED', message: 'Run the authorized discovery workflow before using document retrieval.' });
     if (error instanceof UpstreamError) {
@@ -117,3 +133,5 @@ export function createApp(provider: OmgevingsloketProvider, logger: Logger): Exp
   });
   return app;
 }
+
+class DownloadLimitError extends Error {}

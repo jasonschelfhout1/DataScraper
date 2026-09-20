@@ -46,6 +46,9 @@ export class OmgevingsloketHttpClient {
     if (response.status === 404) throw new UpstreamError('Project not found.', 'not_found', 404);
     if (response.status === 429) throw new UpstreamError('The upstream service rate limited this request.', 'rate_limited', 429);
     if (response.status >= 500) throw new UpstreamError('The upstream service is temporarily unavailable.', 'temporary', response.status);
+    if (response.status === 401 || response.status === 403) {
+      throw new UpstreamError('Official browser verification is required. Run npm run authorize and try again.', 'verification_required', response.status);
+    }
     const contentType = response.headers.get('content-type') ?? '';
     if (!response.ok || !contentType.includes('json')) {
       const body = contentType.includes('html') ? await response.text().catch(() => '') : '';

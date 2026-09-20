@@ -39,4 +39,11 @@ describe('HttpOmgevingsloketProvider', () => {
     for await (const chunk of file.stream) chunks.push(Buffer.from(chunk));
     expect(Buffer.concat(chunks).toString()).toBe('pdf');
   });
+  it('provides a reauthorization error for a rejected download session', async () => {
+    const rejected = new HttpOmgevingsloketProvider({
+      expectJson: async () => ({}),
+      fetch: async () => new Response(null, { status: 403 }),
+    });
+    await expect(rejected.downloadDocument('2018110330', fileId)).rejects.toMatchObject({ kind: 'verification_required' });
+  });
 });

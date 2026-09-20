@@ -6,14 +6,22 @@ import { createApp } from './app.js';
 import type { OmgevingsloketProvider } from './omgevingsloket/types.js';
 
 const document = { id: 'document_one', projectNumber: '2026045710', name: 'plan.pdf', downloadable: true };
+let upstreamCalls = 0;
 const provider: OmgevingsloketProvider = {
-  getProject: async (projectNumber) => ({ projectNumber, title: 'Example project' }),
-  getDocuments: async () => [document],
-  downloadDocument: async () => ({ stream: Readable.from('file'), filename: 'plan.pdf', contentType: 'application/pdf' }),
+  getProject: async (projectNumber) => { upstreamCalls += 1; return { projectNumber, title: 'Example project' }; },
+  getDocuments: async () => { upstreamCalls += 1; return [document]; },
+  downloadDocument: async () => { upstreamCalls += 1; return { stream: Readable.from('file'), filename: 'plan.pdf', contentType: 'application/pdf' }; },
 };
 const app = createApp(provider, pino({ enabled: false }));
 
 describe('internal API', () => {
+  it('provides a local health check without calling the upstream service', async () => {
+    const callsBefore = upstreamCalls;
+    const response = await request(app).get('/api/health');
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('ok');
+    expect(upstreamCalls).toBe(callsBefore);
+  });
   it('rejects invalid project input', async () => {
     const response = await request(app).get('/api/projects/not-a-project');
     expect(response.status).toBe(400);

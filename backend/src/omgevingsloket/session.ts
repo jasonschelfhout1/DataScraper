@@ -16,8 +16,13 @@ export async function saveSession(cookies: SessionCookie[]): Promise<void> {
 }
 
 export async function loadCookieHeader(): Promise<string | undefined> {
+  return loadCookieHeaderFrom(config.OMGEVINGSLOKET_COOKIE_HEADER, sessionPath);
+}
+
+export async function loadCookieHeaderFrom(environmentHeader: string | undefined, localPath: string): Promise<string | undefined> {
+  if (environmentHeader) return environmentHeader;
   try {
-    const json: unknown = JSON.parse(await readFile(sessionPath, 'utf8'));
+    const json: unknown = JSON.parse(await readFile(localPath, 'utf8'));
     const session = sessionSchema.parse(json);
     const now = Date.now() / 1000;
     const valid = session.cookies.filter((cookie) => config.allowedHosts.has(cookie.domain.replace(/^\./, '')) && (cookie.expires === undefined || cookie.expires > now));

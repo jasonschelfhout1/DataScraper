@@ -63,6 +63,9 @@ export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
 
   async downloadDocument(_projectNumber: string, documentId: string): Promise<DownloadStream> {
     const response = await this.client.fetch(this.url(`/bestanden/${documentId}/download`));
+    if (response.status === 401 || response.status === 403) {
+      throw new UpstreamError('Official browser verification is required. Run npm run authorize and try again.', 'verification_required', response.status);
+    }
     if (!response.ok || !response.body) {
       throw new UpstreamError('The upstream service could not provide this document.', response.status === 404 ? 'not_found' : 'unexpected', response.status);
     }
