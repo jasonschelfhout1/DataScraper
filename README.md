@@ -19,6 +19,18 @@ npm run dev
 
 Open `http://localhost:5173`. Vite proxies `/api` to Express at port 3001. For a local production check, run `npm run build` followed by `npm start`; Express serves the built frontend and API.
 
+## Authentication
+
+This is intentionally a single-user/shared-credential utility. Before running it locally, create `.env` from `.env.example` and set `AUTH_USERNAME`, `AUTH_PASSWORD`, and `AUTH_SESSION_SECRET`. Generate the session secret with:
+
+```bash
+openssl rand -base64 48
+```
+
+The application stores only a signed, HTTP-only session cookie for about 24 hours; it never places the password, application secrets, or the Omgevingsloket cookie in the React bundle or browser storage. The login endpoint has a separate five-attempts-per-15-minutes IP limit. Existing project request limits remain active after login. `GET /api/health` stays public for Render, while scraper and download APIs require a valid session.
+
+Never commit `.env`. On Render, configure `AUTH_USERNAME`, `AUTH_PASSWORD`, and `AUTH_SESSION_SECRET` as secrets along with `OMGEVINGSLOKET_COOKIE_HEADER`.
+
 ## Deploy on Render
 
 This repository is ready for one Render Web Service. Commit [render.yaml](render.yaml), push to GitHub, then create a **Blueprint** in Render and select the repository. The Blueprint builds with `npm ci && npm run build`, starts with `npm start`, and checks `GET /api/health`; Render supplies `PORT` automatically.

@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import type { Logger } from 'pino';
 import { pinoHttp } from 'pino-http';
 import { z } from 'zod';
+import { configureSession, login, logout, requireAuthentication, sessionStatus } from './auth.js';
 import { config } from './config.js';
 import { DownloadCapacityError, DownloadJobs } from './downloads.js';
 import { sanitizeFilename } from './filenames.js';
@@ -12,7 +13,7 @@ import { DiscoveryRequiredError, UpstreamError } from './omgevingsloket/errors.j
 import { TimedCache } from './omgevingsloket/cache.js';
 import type { Document, OmgevingsloketProvider, Project } from './omgevingsloket/types.js';
 import { documentIdSchema, InputError, parseProjectInput } from './validation.js';
-import { expensiveRequestLimiter } from './rate-limit.js';
+import { expensiveRequestLimiter, loginAttemptLimiter } from './rate-limit.js';
 
 const downloadRequestSchema = z.object({ documentIds: z.array(documentIdSchema).min(1) });
 const jobIdSchema = z.string().uuid();
@@ -32,7 +33,12 @@ export function createApp(provider: OmgevingsloketProvider, logger: Logger): Exp
     },
   }));
   app.use(express.json({ limit: '16kb' }));
+  app.use(configureSession());
   app.get('/api/health', (_request, response) => response.json({ status: 'ok', service: 'datascraper', uptime: Math.floor(process.uptime()) }));
+  app.post('/api/auth/login', loginAttemptLimiter(config), login);
+  app.post('/api/auth/logout', logout);
+  app.get('/api/auth/session', sessionStatus);
+  app.use('/api', requireAuthentication);
   app.use('/api/projects', expensiveRequestLimiter(config));
 
   const projectFor = async (projectNumber: string): Promise<Project> => {

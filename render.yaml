@@ -7,11 +7,19 @@ services:
     healthCheckPath: /api/health
     maxShutdownDelaySeconds: 15
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DEBUG_OMGEVINGSLOKET
         value: "false"
       - key: LOCAL_DATA_DIR
         value: /tmp/datascraper
       - key: LOG_LEVEL
         value: info
+      - key: AUTH_USERNAME
+        sync: false
+      - key: AUTH_PASSWORD
+        sync: false
+      - key: AUTH_SESSION_SECRET
+        sync: false
       - key: OMGEVINGSLOKET_COOKIE_HEADER
         sync: false
