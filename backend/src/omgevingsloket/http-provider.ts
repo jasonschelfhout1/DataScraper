@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { OmgevingsloketHttpClient } from './client.js';
 import { UpstreamError } from './errors.js';
-import type { Document, DownloadStream, OmgevingsloketProvider, Project } from './types.js';
+import type { DiscoveredProject, Document, DownloadStream, OmgevingsloketProvider, Project, ProjectSearchPage, SearchBounds } from './types.js';
 
 const idSchema = z.string().regex(/^[A-Za-z0-9_-]{10,128}$/);
 const headerSchema = z.object({ uuid: idSchema, projectnummer: z.string(), projectnaam: z.string().optional(), toestand: z.string().optional() }).passthrough();
@@ -12,7 +12,16 @@ const phaseSchema = z.object({ uuid: idSchema }).passthrough();
 const eventSchema = z.object({ uuid: idSchema.optional(), adviesVraagGebeurtenisUuid: idSchema.optional(), gebeurtenis: z.object({ code: z.string().optional() }).optional() })
   .passthrough()
   .refine((event) => event.uuid !== undefined || event.adviesVraagGebeurtenisUuid !== undefined, 'Missing event identifier');
-const pageSchema = z.object({ content: z.array(z.unknown()), totalPages: z.number().int().nonnegative().optional(), last: z.boolean().optional() }).passthrough();
+const pageSchema = z.object({ content: z.array(z.unknown()), totalPages: z.number().int().nonnegative().optional(), last: z.boolean().optional(), number: z.number().int().nonnegative().optional() }).passthrough();
+const searchProjectSchema = z.object({
+  uuid: idSchema,
+  puuid: idSchema.optional(),
+  projectnummer: z.string().regex(/^\d{10}$/),
+  projectNaam: z.string().optional(),
+  behandelendeOverheid: z.string().optional(),
+  adres: z.string().optional(),
+  inzageGegevensTypeEnum: z.string().optional(),
+}).passthrough();
 const fileSchema = z.object({
   uuid: idSchema, bestandsnaam: z.string().min(1), omschrijving: z.string().nullable().optional(), mimeType: z.string().nullable().optional(),
   grootte: z.string().nullable().optional(), veiligheidscategorie: z.string().nullable().optional(),
@@ -31,6 +40,34 @@ const eventCollections = [
 /** Confirmed from the user-authorized 2018110330 capture. */
 export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
   constructor(private readonly client: HttpClient = new OmgevingsloketHttpClient()) {}
+
+  async searchProjects(bounds: SearchBounds, page: number): Promise<ProjectSearchPage> {
+    if (!Number.isInteger(page) || page < 0 || !validBounds(bounds)) throw new UpstreamError('The requested discovery bounds are invalid.', 'unexpected');
+    try {
+      // Captured from the official map UI: POST body is a one-item bounding-box filter array;
+      // page size and sort intentionally match the observed request exactly.
+      const result = pageSchema.parse(await this.client.expectJson(
+        this.url(`/projecten/zoeken?page=${page}&size=10&sort=PROJECTNUMMER`),
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify([boundingBoxFilter(bounds)]) },
+      ));
+      const projects = result.content.map((item): DiscoveredProject => {
+        const project = searchProjectSchema.parse(item);
+        return {
+          projectNumber: project.projectnummer,
+          upstreamUuid: project.uuid,
+          ...(project.puuid ? { upstreamPuuid: project.puuid } : {}),
+          ...(project.projectNaam ? { title: project.projectNaam } : {}),
+          ...(project.behandelendeOverheid ? { municipality: project.behandelendeOverheid } : {}),
+          ...(project.adres ? { address: project.adres } : {}),
+          ...(project.inzageGegevensTypeEnum ? { publicationType: project.inzageGegevensTypeEnum } : {}),
+        };
+      });
+      const totalPages = result.totalPages ?? (result.last ? page + 1 : page + 1);
+      return { projects, page: result.number ?? page, totalPages, last: result.last ?? page + 1 >= totalPages };
+    } catch (error) {
+      throw normalizeSchemaError(error);
+    }
+  }
 
   async getProject(projectNumber: string): Promise<Project> {
     try {
@@ -123,6 +160,22 @@ export class HttpOmgevingsloketProvider implements OmgevingsloketProvider {
   private url(path: string): URL {
     return new URL(`${API_PREFIX}${path}`, config.baseUrl);
   }
+}
+
+function boundingBoxFilter(bounds: SearchBounds) {
+  return {
+    filterType: 'BOUNDING_BOX',
+    abstractFilterInhoud: {
+      '@type': 'InzageFilterinhoudMetBoundingBox',
+      boundingBoxResource: bounds,
+      coordinatenStelsel: 'EPSG:31370',
+    },
+  };
+}
+
+function validBounds(bounds: SearchBounds): boolean {
+  return [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY].every(Number.isFinite)
+    && bounds.minX < bounds.maxX && bounds.minY < bounds.maxY;
 }
 
 function parseSize(value: string | null | undefined): number | undefined {

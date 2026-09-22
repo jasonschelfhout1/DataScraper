@@ -2,6 +2,7 @@ services:
   - type: web
     name: datascraper
     runtime: node
+    plan: free
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
@@ -14,9 +15,7 @@ services:
       - key: LOCAL_DATA_DIR
         value: /tmp/datascraper
       - key: DATABASE_URL
-        fromDatabase:
-          name: datascraper-db
-          property: connectionString
+        sync: false
       - key: LOG_LEVEL
         value: info
       - key: AUTH_USERNAME
@@ -38,16 +37,18 @@ services:
   - type: cron
     name: datascraper-crawler
     runtime: node
-    schedule: "*/15 * * * *"
+    # Daily keeps Render's metered cron runtime comfortably below the €10 budget.
+    schedule: "0 3 * * *"
+    plan: 0.5c-512mb
     buildCommand: npm ci && npm run build
     startCommand: npm run crawl:once
     envVars:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: datascraper-db
-          property: connectionString
+        sync: false
+      - key: ARCHIVE_MAX_STORAGE_BYTES
+        value: "8589934592"
       - key: AUTH_USERNAME
         sync: false
       - key: AUTH_PASSWORD
@@ -64,6 +65,18 @@ services:
         sync: false
       - key: R2_ENDPOINT
         sync: false
-databases:
-  - name: datascraper-db
-    plan: basic-256mb
+  - type: cron
+    name: datascraper-db-prune
+    runtime: node
+    # Every Sunday at 03:30 UTC, after the daily crawler's 03:00 UTC window.
+    schedule: "30 3 * * 0"
+    plan: 0.5c-512mb
+    buildCommand: npm ci && npm run build
+    startCommand: npm run db:prune
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CRAWL_TASK_RETENTION_DAYS
+        value: "7"

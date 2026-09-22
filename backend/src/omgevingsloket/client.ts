@@ -41,8 +41,8 @@ export class OmgevingsloketHttpClient {
     throw new UpstreamError('The upstream request failed.', 'temporary');
   }
 
-  async expectJson(url: URL): Promise<unknown> {
-    const response = await this.fetch(url);
+  async expectJson(url: URL, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.fetch(url, init);
     if (response.status === 404) throw new UpstreamError('Project not found.', 'not_found', 404);
     if (response.status === 429) throw new UpstreamError('The upstream service rate limited this request.', 'rate_limited', 429);
     if (response.status >= 500) throw new UpstreamError('The upstream service is temporarily unavailable.', 'temporary', response.status);

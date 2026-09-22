@@ -37,7 +37,7 @@ npm run authorize -- 2026045710
 # Confirm a known project traversal
 npm run discover -- project 2026045710 --har
 
-# Required before global discovery can be implemented
+# Capture the public map/search contract (already completed for this repository)
 npm run discover -- search --har
 
 # Required before Inhoud aanvraag files can be archived
@@ -46,6 +46,11 @@ npm run discover -- content 2026045710 --har
 # Known-project archive crawl; normal users cannot trigger it
 npm run crawl:project -- 2026045710
 npm run crawl:once
+
+# Queue a captured EPSG:31370 map viewport for paginated archive discovery.
+# Use only bounds you intentionally want the crawler to cover.
+npm run crawl:discover -- 99138 181025 129337 203330
+npm run crawl:once
 npm run crawl:status
 # After a fresh manual authorization if crawler status says paused
 npm run crawl:resume
@@ -53,13 +58,17 @@ npm run crawl:resume
 
 `discover -- search` requires you to manually search a municipality, paginate, adjust publication/authority filters, and pan/zoom the map. `discover -- content` requires manually opening the content branches and a legitimately downloadable file. Sanitized evidence is written under ignored `debug/discovery/`; do not guess routes from UI labels.
 
-Global discovery is deliberately unsupported until that capture proves an official finite enumeration endpoint. The known event traversal is confirmed; the `Inhoud aanvraag` nested relationship is only partially confirmed.
+The captured search endpoint supports bounded, paginated map discovery. It is intentionally not treated as a nationwide endpoint: choose and queue explicit EPSG:31370 map bounds, then let the conservative worker process them. The known event traversal is confirmed; the `Inhoud aanvraag` nested file relationship is still only partially confirmed.
 
-## R2 and deployment
+## Low-cost deployment
 
-Create a **private** Cloudflare R2 bucket, preferably in an EU jurisdiction, and create an S3 API token limited to that bucket. Configure `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`, and `R2_REGION=auto`. The bucket is never public.
+This Blueprint is intentionally capped for a personal archive target of under €10/month. It cannot create an unconditional vendor billing guarantee: pricing, external usage in a shared account, and user changes to limits are outside the application. Keep the R2 bucket dedicated to this app and do not raise `ARCHIVE_MAX_STORAGE_BYTES`.
 
-The Render Blueprint defines a web service, PostgreSQL database, and a 15-minute bounded crawler cron. Configure these Render secrets on the web service and crawler as applicable:
+Create a **private, Standard-class** Cloudflare R2 bucket, preferably in an EU jurisdiction, and create an S3 API token limited to that bucket. Configure `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_ENDPOINT`, and `R2_REGION=auto`. The bucket is never public. The crawler refuses additional uploads after 8 GiB, which stays below R2's 10 GB monthly Standard-storage free allowance.
+
+Create a free Supabase Postgres project and use its SSL connection string as `DATABASE_URL`. Its free plan has a 500 MB database limit; if that fills, it becomes read-only rather than creating an overage. The archive's PDF bytes remain in R2, not the database.
+
+The Render Blueprint defines a free web service and a once-daily, bounded starter Cron Job. Configure these secrets on **both** services as applicable:
 
 ```text
 AUTH_USERNAME
@@ -70,9 +79,16 @@ R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
 R2_BUCKET
 R2_ENDPOINT
+DATABASE_URL
 ```
 
-Run `npm run db:migrate` once against the Render PostgreSQL `DATABASE_URL` before enabling the crawler. The cron uses `npm run crawl:once`; use `npm run crawl:worker` only for a deliberate future Background Worker deployment, never alongside the cron without operational review.
+Run `npm run db:migrate` once against the external `DATABASE_URL` before enabling the crawler. The cron uses `npm run crawl:once`; use `npm run crawl:worker` only for a deliberate future Background Worker deployment, never alongside the cron without operational review.
+
+To retain an existing local archive when moving to Supabase, run the migration above, then set `SOURCE_DATABASE_URL` to the local PostgreSQL URL and run `npm run db:import-local`. The importer refuses to run unless all destination archive tables are empty, copies metadata and queue state in dependency order, and verifies each row count. It never copies or deletes R2 objects.
+
+`datascraper-db-prune` runs every Sunday at 03:30 UTC. It removes only completed crawl tasks older than seven days and runs `VACUUM (ANALYZE)` on that queue table. Run `npm run db:prune` locally to perform the same safe maintenance. It never deletes archive metadata or R2 objects. The separate maintenance Cron Job has Render's $1/month minimum, which is included in the stated personal budget.
+
+The intended baseline is: Render web $0, Supabase Postgres $0 while it remains within 500 MB, Render Cron Job about $1/month minimum, and R2 $0 while it remains within its free tier. Check both provider dashboards after deployment; do not add unrelated data to the R2 bucket or enable paid database/storage upgrades.
 
 ## Safety and troubleshooting
 

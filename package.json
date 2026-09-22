@@ -18,11 +18,14 @@
     "test:integration": "tsx scripts/integration.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx backend/src/db/migrate.ts",
+    "db:prune": "tsx scripts/prune-database.ts",
+    "db:import-local": "tsx scripts/import-local-archive.ts",
     "crawl:once": "tsx scripts/crawl-once.ts",
     "crawl:worker": "tsx scripts/crawl-worker.ts",
     "crawl:status": "tsx scripts/crawl-status.ts",
     "crawl:resume": "tsx scripts/crawl-resume.ts",
-    "crawl:project": "tsx scripts/crawl-project.ts"
+    "crawl:project": "tsx scripts/crawl-project.ts",
+    "crawl:discover": "tsx scripts/crawl-discover.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

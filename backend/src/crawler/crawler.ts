@@ -19,15 +19,26 @@ export class ArchiveCrawler {
     while (Date.now() < deadline && completed < config.CRAWLER_MAX_TASKS_PER_RUN) {
       const task = await this.tasks.claim(workerId, config.CRAWLER_TASK_LEASE_MS); if (!task) break;
       try { await this.execute(task); await this.tasks.complete(task.id); completed += 1; this.logger.info({ taskId: task.id, type: task.type }, 'crawl task completed'); }
-      catch (error) { if (error instanceof UpstreamError && error.kind === 'verification_required') { await this.tasks.pause('upstream_verification_required'); await this.tasks.retry(task, config.CRAWLER_RETRY_BASE_MS, 'upstream_verification_required'); this.logger.warn('crawler paused verification required'); break; } const delay = retryDelay(task.attempts); await this.tasks.retry(task, delay, error instanceof Error ? error.message : 'unknown crawler failure'); this.logger.warn({ taskId: task.id, delay }, 'crawl task rescheduled'); }
+      catch (error) { if (error instanceof ArchiveStorageLimitError) { await this.tasks.pause('archive_storage_limit_reached'); await this.tasks.retry(task, config.CRAWLER_RETRY_BASE_MS, error.message); this.logger.warn({ taskId: task.id, maxStorageBytes: config.ARCHIVE_MAX_STORAGE_BYTES }, 'crawler paused archive storage limit reached'); break; } if (error instanceof UpstreamError && error.kind === 'verification_required') { await this.tasks.pause('upstream_verification_required'); await this.tasks.retry(task, config.CRAWLER_RETRY_BASE_MS, 'upstream_verification_required'); this.logger.warn('crawler paused verification required'); break; } const delay = retryDelay(task.attempts); await this.tasks.retry(task, delay, error instanceof Error ? error.message : 'unknown crawler failure'); this.logger.warn({ taskId: task.id, delay }, 'crawl task rescheduled'); }
     }
     this.logger.info({ workerId, completed }, 'crawler run completed');
   }
   private async execute(task: CrawlTask): Promise<void> {
-    if (task.type === 'discover_projects') throw new Error('Project enumeration is unsupported until search discovery captures an official endpoint.');
+    if (task.type === 'discover_projects') return this.discoverProjects(task);
     if (task.type === 'crawl_project' || task.type === 'recheck_project') return this.crawlProject(task);
     if (task.type === 'download_document') return this.downloadDocument(task);
     throw new Error(`Unsupported crawl task type: ${task.type}`);
+  }
+  private async discoverProjects(task: CrawlTask): Promise<void> {
+    if (!task.payload) throw new Error('Discovery task is missing a captured map bounding box.');
+    await this.throttle();
+    const result = await this.provider.searchProjects(task.payload.bounds, task.payload.page);
+    for (const project of result.projects) {
+      const inserted = await this.pool.query(`INSERT INTO projects (project_number, upstream_uuid, upstream_puuid, title, municipality, publication_type, source_metadata, crawl_status, last_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,'pending',now()) ON CONFLICT (project_number) DO UPDATE SET upstream_uuid=EXCLUDED.upstream_uuid, upstream_puuid=EXCLUDED.upstream_puuid, title=EXCLUDED.title, municipality=EXCLUDED.municipality, publication_type=EXCLUDED.publication_type, source_metadata=EXCLUDED.source_metadata, last_seen_at=now(), updated_at=now() RETURNING id`, [project.projectNumber, project.upstreamUuid, project.upstreamPuuid ?? null, project.title ?? null, project.municipality ?? null, project.publicationType ?? null, JSON.stringify({ address: project.address ?? null, source: 'public_map_search' })]);
+      await this.tasks.queueProject(inserted.rows[0].id);
+    }
+    if (!result.last && result.page + 1 < result.totalPages) await this.tasks.queueDiscovery({ bounds: task.payload.bounds, page: result.page + 1 });
+    await this.pool.query(`UPDATE crawler_state SET last_discovery_at=now(), current_discovery_cursor=$1::jsonb WHERE id=1`, [JSON.stringify({ bounds: task.payload.bounds, page: result.page, totalPages: result.totalPages })]);
   }
   private async crawlProject(task: CrawlTask): Promise<void> {
     if (!task.projectId || !task.projectNumber) throw new Error('Project task is missing its project identity.');
@@ -40,10 +51,16 @@ export class ArchiveCrawler {
   private async downloadDocument(task: CrawlTask): Promise<void> {
     if (!task.documentId || !task.projectNumber || !task.documentUuid || !task.filename) throw new Error('Document task is missing archive identity.');
     if (task.storageKey) return;
-    await this.throttle(); const file = await this.provider.downloadDocument(task.projectNumber, task.documentUuid); const key = archiveObjectKey(task.projectNumber, task.documentUuid, task.filename); const uploaded = await this.store.put(key, file.stream, file.contentType ?? task.mimeType);
+    await this.throttle(); const file = await this.provider.downloadDocument(task.projectNumber, task.documentUuid);
+    if (file.contentLength === undefined || !Number.isSafeInteger(file.contentLength) || file.contentLength <= 0) throw new ArchiveStorageLimitError('Archive storage cap requires an upstream Content-Length before a document can be stored.');
+    const usage = await this.pool.query<{ archived_bytes: string }>(`SELECT COALESCE(sum(size_bytes), 0)::text AS archived_bytes FROM documents WHERE download_status='downloaded'`);
+    const archivedBytes = Number(usage.rows[0]?.archived_bytes ?? 0);
+    if (!Number.isSafeInteger(archivedBytes) || archivedBytes + file.contentLength > config.ARCHIVE_MAX_STORAGE_BYTES) throw new ArchiveStorageLimitError('Archive storage cap reached; no additional documents will be uploaded.');
+    const key = archiveObjectKey(task.projectNumber, task.documentUuid, task.filename); const uploaded = await this.store.put(key, file.stream, file.contentType ?? task.mimeType);
     if (file.contentLength && file.contentLength !== uploaded.bytes) throw new Error('Archived byte count did not match upstream Content-Length.');
     await this.pool.query(`UPDATE documents SET storage_key=$2, sha256=$3, size_bytes=$4, mime_type=COALESCE($5,mime_type), download_status='downloaded', downloaded_at=now(), last_error=NULL, updated_at=now() WHERE id=$1`, [task.documentId, uploaded.key, uploaded.sha256, uploaded.bytes, file.contentType ?? null]);
   }
   private async throttle(): Promise<void> { const wait = Math.max(0, this.lastRequestAt + config.CRAWLER_MIN_REQUEST_DELAY_MS + Math.floor(Math.random() * config.CRAWLER_REQUEST_JITTER_MS) - Date.now()); if (wait) await new Promise((resolve) => setTimeout(resolve, wait)); this.lastRequestAt = Date.now(); }
 }
+class ArchiveStorageLimitError extends Error {}
 function retryDelay(attempt: number): number { return Math.min(3_600_000, config.CRAWLER_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1)); }
