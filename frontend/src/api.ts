@@ -1,4 +1,4 @@
-import type { ArchiveDocument, ArchiveProject, ArchiveStats } from './types';
+import type { ArchiveDocument, ArchiveFilters, ArchiveProject, ArchiveStats } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public readonly code?: string, public readonly status?: number) { super(message); }
@@ -29,7 +29,14 @@ export const api = {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }),
   }),
   logout: () => request<AuthSession>('/api/auth/logout', { method: 'POST' }),
-  searchArchive: (query: string, page = 0) => request<{ projects: ArchiveProject[]; total: number }>(`/api/archive/projects?q=${encodeURIComponent(query)}&page=${page}`),
+  searchArchive: (query: string, filters: ArchiveSearchOptions, page = 0) => {
+    const parameters = new URLSearchParams({ q: query, page: String(page), visibility: filters.visibility });
+    if (filters.municipality) parameters.set('municipality', filters.municipality);
+    if (filters.status) parameters.set('status', filters.status);
+    if (filters.publicationType) parameters.set('publicationType', filters.publicationType);
+    return request<{ projects: ArchiveProject[]; total: number }>(`/api/archive/projects?${parameters}`);
+  },
+  archiveFilters: () => request<ArchiveFilters>('/api/archive/filters'),
   archiveProject: (projectNumber: string) => request<ArchiveProject>(`/api/archive/projects/${encodeURIComponent(projectNumber)}`),
   archiveDocuments: async (projectNumber: string) => (await request<{ documents: ArchiveDocument[] }>(`/api/archive/projects/${encodeURIComponent(projectNumber)}/documents`)).documents,
   archiveStatus: () => request<ArchiveStats>('/api/archive/status'),
@@ -38,4 +45,11 @@ export const api = {
 export interface AuthSession {
   authenticated: boolean;
   username?: string;
+}
+
+export interface ArchiveSearchOptions {
+  municipality: string;
+  status: string;
+  publicationType: string;
+  visibility: 'all' | 'current' | 'historical';
 }

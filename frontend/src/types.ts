@@ -4,6 +4,7 @@ export interface ArchiveProject {
   title?: string;
   municipality?: string;
   status?: string;
+  publicationType?: string;
   isCurrentlyPublic: boolean;
   firstSeenAt: string;
   lastSeenAt: string;
@@ -28,3 +29,5 @@ export interface ArchiveDocument {
 }
 
 export interface ArchiveStats { projects: number; currentlyPublicProjects: number; documents: number; archivedDocuments: number; viewOnlyDocuments: number; pendingDownloads: number; failedDownloads: number; pendingTasks: number; paused: boolean; pauseReason?: string; lastSuccessfulUpstreamRequestAt?: string }
+
+export interface ArchiveFilters { municipalities: string[]; statuses: string[]; publicationTypes: string[] }

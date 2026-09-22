@@ -1,16 +1,25 @@
 import type { Pool } from 'pg';
-import type { ArchiveDocument, ArchiveProject, ArchiveRepository, ArchiveStats } from '../../archive/types.js';
+import { rankProjectsByQuery } from '../../archive/search.js';
+import type { ArchiveDocument, ArchiveFilters, ArchiveProject, ArchiveRepository, ArchiveSearchOptions, ArchiveStats } from '../../archive/types.js';
 
 export class PgArchiveRepository implements ArchiveRepository {
   constructor(private readonly pool: Pool) {}
 
-  async searchProjects(query: string, page: number, size: number): Promise<{ projects: ArchiveProject[]; total: number }> {
-    const pattern = `%${query.trim()}%`;
-    const result = await this.pool.query(`SELECT p.id, p.project_number, p.title, p.municipality, p.status, p.is_currently_public, p.first_seen_at, p.last_seen_at, p.last_crawled_at, count(d.id)::int AS document_count, count(*) OVER()::int AS total FROM projects p LEFT JOIN documents d ON d.project_id = p.id WHERE ($1 = '%%' OR p.project_number ILIKE $1 OR COALESCE(p.title, '') ILIKE $1 OR COALESCE(p.municipality, '') ILIKE $1) GROUP BY p.id ORDER BY p.last_seen_at DESC LIMIT $2 OFFSET $3`, [pattern, size, page * size]);
-    return { projects: result.rows.map(projectRow), total: Number(result.rows[0]?.total ?? 0) };
+  async searchProjects(options: ArchiveSearchOptions, page: number, size: number): Promise<{ projects: ArchiveProject[]; total: number }> {
+    const result = await this.pool.query(`SELECT p.id, p.project_number, p.title, p.municipality, p.status, p.publication_type, p.is_currently_public, p.first_seen_at, p.last_seen_at, p.last_crawled_at, count(d.id)::int AS document_count FROM projects p LEFT JOIN documents d ON d.project_id = p.id WHERE ($1 = '' OR p.municipality = $1) AND ($2 = '' OR p.status = $2) AND ($3 = '' OR p.publication_type = $3) AND ($4 = 'all' OR ($4 = 'current' AND p.is_currently_public) OR ($4 = 'historical' AND NOT p.is_currently_public)) GROUP BY p.id`, [options.municipality ?? '', options.status ?? '', options.publicationType ?? '', options.visibility]);
+    const matching = rankProjectsByQuery(result.rows.map(projectRow), options.query);
+    return { projects: matching.slice(page * size, (page + 1) * size), total: matching.length };
+  }
+  async filters(): Promise<ArchiveFilters> {
+    const [municipalities, statuses, publicationTypes] = await Promise.all([
+      this.pool.query(`SELECT DISTINCT municipality AS value FROM projects WHERE municipality IS NOT NULL AND municipality <> '' ORDER BY municipality`),
+      this.pool.query(`SELECT DISTINCT status AS value FROM projects WHERE status IS NOT NULL AND status <> '' ORDER BY status`),
+      this.pool.query(`SELECT DISTINCT publication_type AS value FROM projects WHERE publication_type IS NOT NULL AND publication_type <> '' ORDER BY publication_type`),
+    ]);
+    return { municipalities: filterValues(municipalities.rows), statuses: filterValues(statuses.rows), publicationTypes: filterValues(publicationTypes.rows) };
   }
   async getProject(projectNumber: string): Promise<ArchiveProject | undefined> {
-    const result = await this.pool.query(`SELECT p.id, p.project_number, p.title, p.municipality, p.status, p.is_currently_public, p.first_seen_at, p.last_seen_at, p.last_crawled_at, count(d.id)::int AS document_count FROM projects p LEFT JOIN documents d ON d.project_id = p.id WHERE p.project_number = $1 GROUP BY p.id`, [projectNumber]);
+    const result = await this.pool.query(`SELECT p.id, p.project_number, p.title, p.municipality, p.status, p.publication_type, p.is_currently_public, p.first_seen_at, p.last_seen_at, p.last_crawled_at, count(d.id)::int AS document_count FROM projects p LEFT JOIN documents d ON d.project_id = p.id WHERE p.project_number = $1 GROUP BY p.id`, [projectNumber]);
     return result.rows[0] ? projectRow(result.rows[0]) : undefined;
   }
   async getDocuments(projectNumber: string): Promise<ArchiveDocument[]> {
@@ -28,5 +37,6 @@ export class PgArchiveRepository implements ArchiveRepository {
   }
 }
 
-function projectRow(row: Record<string, unknown>): ArchiveProject { return { id: String(row.id), projectNumber: String(row.project_number), ...(row.title ? { title: String(row.title) } : {}), ...(row.municipality ? { municipality: String(row.municipality) } : {}), ...(row.status ? { status: String(row.status) } : {}), isCurrentlyPublic: Boolean(row.is_currently_public), firstSeenAt: new Date(String(row.first_seen_at)).toISOString(), lastSeenAt: new Date(String(row.last_seen_at)).toISOString(), ...(row.last_crawled_at ? { lastCrawledAt: new Date(String(row.last_crawled_at)).toISOString() } : {}), documentCount: Number(row.document_count ?? 0) }; }
+function projectRow(row: Record<string, unknown>): ArchiveProject { return { id: String(row.id), projectNumber: String(row.project_number), ...(row.title ? { title: String(row.title) } : {}), ...(row.municipality ? { municipality: String(row.municipality) } : {}), ...(row.status ? { status: String(row.status) } : {}), ...(row.publication_type ? { publicationType: String(row.publication_type) } : {}), isCurrentlyPublic: Boolean(row.is_currently_public), firstSeenAt: new Date(String(row.first_seen_at)).toISOString(), lastSeenAt: new Date(String(row.last_seen_at)).toISOString(), ...(row.last_crawled_at ? { lastCrawledAt: new Date(String(row.last_crawled_at)).toISOString() } : {}), documentCount: Number(row.document_count ?? 0) }; }
 function documentRow(row: Record<string, unknown>): ArchiveDocument { return { id: String(row.id), projectNumber: String(row.project_number), upstreamUuid: String(row.upstream_uuid), filename: String(row.filename), ...(row.description ? { description: String(row.description) } : {}), ...(row.category ? { category: String(row.category) } : {}), ...(row.mime_type ? { mimeType: String(row.mime_type) } : {}), ...(row.size_bytes !== null && row.size_bytes !== undefined ? { sizeBytes: Number(row.size_bytes) } : {}), downloadable: Boolean(row.downloadable), downloadStatus: String(row.download_status), ...(row.storage_key ? { storageKey: String(row.storage_key) } : {}), firstSeenAt: new Date(String(row.first_seen_at)).toISOString() }; }
+function filterValues(rows: Array<Record<string, unknown>>): string[] { return rows.flatMap((row) => typeof row.value === 'string' ? [row.value] : []); }

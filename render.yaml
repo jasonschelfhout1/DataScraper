@@ -24,8 +24,6 @@ services:
         sync: false
       - key: AUTH_SESSION_SECRET
         sync: false
-      - key: OMGEVINGSLOKET_COOKIE_HEADER
-        sync: false
       - key: R2_ACCESS_KEY_ID
         sync: false
       - key: R2_SECRET_ACCESS_KEY
@@ -49,12 +47,6 @@ services:
         sync: false
       - key: ARCHIVE_MAX_STORAGE_BYTES
         value: "8589934592"
-      - key: AUTH_USERNAME
-        sync: false
-      - key: AUTH_PASSWORD
-        sync: false
-      - key: AUTH_SESSION_SECRET
-        sync: false
       - key: OMGEVINGSLOKET_COOKIE_HEADER
         sync: false
       - key: R2_ACCESS_KEY_ID
