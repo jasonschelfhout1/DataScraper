@@ -25,8 +25,8 @@ export default function ScraperApp({ username, onLogout }: ScraperAppProps) {
 
   const documentCategories = ['All', ...Array.from(new Set(documents.map((document) => document.category ?? 'Other'))).sort((left, right) => left.localeCompare(right))];
   const visibleDocuments = filterDocuments(documents, documentQuery, documentCategory);
-  const downloadableDocuments = documents.filter(isArchivedDownload);
-  const filteredDownloadableDocuments = visibleDocuments.filter(isArchivedDownload);
+  const downloadableDocuments = documents.filter(isPublicDownload);
+  const filteredDownloadableDocuments = visibleDocuments.filter(isPublicDownload);
 
   useEffect(() => {
     void Promise.all([api.archiveStatus(), api.archiveFilters()])
@@ -39,13 +39,16 @@ export default function ScraperApp({ username, onLogout }: ScraperAppProps) {
     setSearching(true); setError(undefined); setSelected(undefined); setDocuments([]); setHasSearched(true);
     try {
       const result = await api.searchArchive(query, filters);
-      setProjects(result.projects); setResultTotal(result.total);
+      if (result.total === 0 && hasNoProjectFilters(filters) && canUseLiveFallback(query)) {
+        try { const project = await api.liveProject(query); setProjects([project]); setResultTotal(1); }
+        catch (liveError) { if (!(liveError instanceof ApiError && liveError.code === 'NOT_FOUND')) throw liveError; setProjects([]); setResultTotal(0); }
+      } else { setProjects(result.projects); setResultTotal(result.total); }
     } catch (cause) { setError(message(cause)); } finally { setSearching(false); }
   }
 
   async function open(project: ArchiveProject): Promise<void> {
     setSelected(project); setOpening(true); setError(undefined); setDocumentQuery(''); setDocumentCategory('All');
-    try { setDocuments(await api.archiveDocuments(project.projectNumber)); } catch (cause) { setError(message(cause)); } finally { setOpening(false); }
+    try { setDocuments(project.source === 'live' ? await api.liveDocuments(project.projectNumber) : await api.archiveDocuments(project.projectNumber)); } catch (cause) { setError(message(cause)); } finally { setOpening(false); }
   }
 
   function setFilter<Key extends keyof ArchiveSearchOptions>(key: Key, value: ArchiveSearchOptions[Key]): void {
@@ -66,19 +69,22 @@ export default function ScraperApp({ username, onLogout }: ScraperAppProps) {
       </fieldset>
     </form>
     {error && <p className="notice error" role="alert">{error}</p>}
-    {hasSearched && <section className="documents"><h2>Archive results <span className="result-count">{resultTotal.toLocaleString()}</span></h2>{projects.length === 0 ? <p className="notice">No archived projects match this search and these filters.</p> : projects.map((project) => <button type="button" className="archive-result" key={project.id} onClick={() => void open(project)} disabled={opening}><strong>{project.projectNumber}</strong><span>{project.title ?? 'Untitled project'}</span><span>{project.municipality ?? 'Municipality unavailable'}</span><small>{project.publicationType ?? 'Publication type unavailable'} - Last seen {new Date(project.lastSeenAt).toLocaleDateString()} - {project.documentCount ?? 0} documents</small></button>)}</section>}
-    {selected && <section className="documents"><h2>{selected.title ?? `Project ${selected.projectNumber}`}</h2><p>{selected.isCurrentlyPublic ? 'Currently observed as public' : 'No longer observed as public'} - First seen {new Date(selected.firstSeenAt).toLocaleDateString()} - Last synchronized {selected.lastCrawledAt ? new Date(selected.lastCrawledAt).toLocaleString() : 'not yet crawled'}</p>{opening ? <p className="notice">Loading archived documents...</p> : documents.length === 0 ? <p className="notice">No documents are archived for this project yet.</p> : <>
-      <div className="document-controls"><label>Find document<input value={documentQuery} onChange={(event) => setDocumentQuery(event.target.value)} placeholder="File name or description" /></label><label>Category<select value={documentCategory} onChange={(event) => setDocumentCategory(event.target.value)}>{documentCategories.map((category) => <option key={category}>{category}</option>)}</select></label><div className="download-actions">{downloadableDocuments.length > 0 ? <a className="button-link" href={projectDownloadUrl(selected.projectNumber)}>Download all ({downloadableDocuments.length})</a> : <span>No archived downloads</span>}{filteredDownloadableDocuments.length > 0 ? <a className="button-link secondary-link" href={projectDownloadUrl(selected.projectNumber, filteredDownloadableDocuments)}>Download filtered ({filteredDownloadableDocuments.length})</a> : <span>No matching archived files</span>}</div></div>
-      <div className="table-wrap"><table><thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{visibleDocuments.map((document) => <tr key={document.id}><td>{document.filename}</td><td>{document.category ?? 'Other'}</td><td>{document.mimeType ?? '-'}</td><td>{formatSize(document.sizeBytes)}</td><td>{document.downloadStatus}</td><td>{document.downloadable && document.downloadStatus === 'downloaded' ? <a href={`/api/archive/documents/${document.id}/download`}>Download</a> : document.viewerUrl ? <a href={document.viewerUrl} target="_blank" rel="noreferrer">View at source</a> : <span>View only</span>}</td></tr>)}</tbody></table></div>{visibleDocuments.length === 0 && <p className="notice">No documents match this filter.</p>}
+    {hasSearched && <section className="documents"><h2>Archive results <span className="result-count">{resultTotal.toLocaleString()}</span></h2>{projects.length === 0 ? <p className="notice">No archived projects match this search and these filters.</p> : projects.map((project) => <button type="button" className="archive-result" key={project.id} onClick={() => void open(project)} disabled={opening}><strong>{project.projectNumber}</strong><span>{project.title ?? 'Untitled project'}</span><span>{project.municipality ?? 'Municipality unavailable'}</span><small>{project.source === 'live' ? 'Live Omgevingsloket fallback' : `${project.publicationType ?? 'Publication type unavailable'} - Last seen ${new Date(project.lastSeenAt).toLocaleDateString()} - ${project.documentCount ?? 0} documents`}</small></button>)}</section>}
+    {selected && <section className="documents"><h2>{selected.title ?? `Project ${selected.projectNumber}`}</h2><p>{selected.source === 'live' ? 'Live Omgevingsloket fallback. This project is not in the local archive.' : `${selected.isCurrentlyPublic ? 'Currently observed as public' : 'No longer observed as public'} - First seen ${new Date(selected.firstSeenAt).toLocaleDateString()} - Last synchronized ${selected.lastCrawledAt ? new Date(selected.lastCrawledAt).toLocaleString() : 'not yet crawled'}`}</p>{opening ? <p className="notice">Loading documents from {selected.source === 'live' ? 'the official site' : 'the archive'}...</p> : documents.length === 0 ? <p className="notice">No documents are available for this project.</p> : <>
+      <div className="document-controls"><label>Find document<input value={documentQuery} onChange={(event) => setDocumentQuery(event.target.value)} placeholder="File name or description" /></label><label>Category<select value={documentCategory} onChange={(event) => setDocumentCategory(event.target.value)}>{documentCategories.map((category) => <option key={category}>{category}</option>)}</select></label><div className="download-actions">{downloadableDocuments.length > 0 ? <a className="button-link" href={projectDownloadUrl(selected, undefined)}>Download all ({downloadableDocuments.length})</a> : <span>No public downloads</span>}{filteredDownloadableDocuments.length > 0 ? <a className="button-link secondary-link" href={projectDownloadUrl(selected, filteredDownloadableDocuments)}>Download filtered ({filteredDownloadableDocuments.length})</a> : <span>No matching public files</span>}</div></div>
+      <div className="table-wrap"><table><thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Size</th><th>Status</th><th>Action</th></tr></thead><tbody>{visibleDocuments.map((document) => <tr key={document.id}><td>{document.filename}</td><td>{document.category ?? 'Other'}</td><td>{document.mimeType ?? '-'}</td><td>{formatSize(document.sizeBytes)}</td><td>{document.downloadStatus}</td><td>{document.downloadable ? <a href={documentDownloadUrl(document)}>{document.source === 'live' ? 'Download' : document.downloadStatus === 'downloaded' ? 'Download' : 'Try live source'}</a> : document.viewerUrl ? <a href={document.viewerUrl} target="_blank" rel="noreferrer">View at source</a> : <span>View only</span>}</td></tr>)}</tbody></table></div>{visibleDocuments.length === 0 && <p className="notice">No documents match this filter.</p>}
     </>}</section>}
   </main>;
 }
 
-function isArchivedDownload(document: ArchiveDocument): boolean { return document.downloadable && document.downloadStatus === 'downloaded' && Boolean(document.storageKey); }
-function projectDownloadUrl(projectNumber: string, documents?: ArchiveDocument[]): string {
+function isPublicDownload(document: ArchiveDocument): boolean { return document.downloadable; }
+function projectDownloadUrl(project: ArchiveProject, documents?: ArchiveDocument[]): string {
   const parameters = new URLSearchParams();
   documents?.forEach((document) => parameters.append('documentId', document.id));
   const suffix = parameters.size ? `?${parameters}` : '';
-  return `/api/archive/projects/${encodeURIComponent(projectNumber)}/download${suffix}`;
+  return `/api/${project.source === 'live' ? 'live' : 'archive'}/projects/${encodeURIComponent(project.projectNumber)}/download${suffix}`;
 }
-function message(error: unknown): string { if (error instanceof ApiError && error.code === 'NOT_FOUND') return 'This project is not archived yet. Searching never triggers a live Omgevingsloket request.'; return error instanceof Error ? error.message : 'The archive could not be queried.'; }
+function documentDownloadUrl(document: ArchiveDocument): string { return document.source === 'live' ? `/api/live/documents/${document.id}/download?projectNumber=${encodeURIComponent(document.projectNumber)}` : `/api/archive/documents/${document.id}/download`; }
+function hasNoProjectFilters(filters: ArchiveSearchOptions): boolean { return !filters.municipality && !filters.status && !filters.publicationType && filters.visibility === 'all'; }
+function canUseLiveFallback(input: string): boolean { return /^(?:omv_)?\d{10}$/i.test(input.trim()) || /^https:\/\//i.test(input.trim()); }
+function message(error: unknown): string { if (error instanceof ApiError && error.code === 'NOT_FOUND') return 'This project is not available in the archive or on the official site.'; if (error instanceof ApiError && error.code === 'VERIFICATION_REQUIRED') return 'Official browser verification is required before live fallback can be used. Run npm run authorize and update the web service session.'; return error instanceof Error ? error.message : 'The archive could not be queried.'; }

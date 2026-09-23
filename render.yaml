@@ -24,6 +24,9 @@ services:
         sync: false
       - key: AUTH_SESSION_SECRET
         sync: false
+      # Required only for the explicit, user-requested live fallback. Reauthorize when it expires.
+      - key: OMGEVINGSLOKET_COOKIE_HEADER
+        sync: false
       - key: R2_ACCESS_KEY_ID
         sync: false
       - key: R2_SECRET_ACCESS_KEY

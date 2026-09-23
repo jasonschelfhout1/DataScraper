@@ -39,6 +39,8 @@ export const api = {
   archiveFilters: () => request<ArchiveFilters>('/api/archive/filters'),
   archiveProject: (projectNumber: string) => request<ArchiveProject>(`/api/archive/projects/${encodeURIComponent(projectNumber)}`),
   archiveDocuments: async (projectNumber: string) => (await request<{ documents: ArchiveDocument[] }>(`/api/archive/projects/${encodeURIComponent(projectNumber)}/documents`)).documents,
+  liveProject: (input: string) => request<ArchiveProject>(`/api/live/projects?input=${encodeURIComponent(input)}`),
+  liveDocuments: async (projectNumber: string) => (await request<{ documents: ArchiveDocument[] }>(`/api/live/projects/${encodeURIComponent(projectNumber)}/documents`)).documents,
   archiveStatus: () => request<ArchiveStats>('/api/archive/status'),
 };
 

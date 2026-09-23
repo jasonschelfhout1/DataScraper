@@ -5,6 +5,7 @@ export interface ArchiveProject {
   municipality?: string;
   status?: string;
   publicationType?: string;
+  source?: 'archive' | 'live';
   isCurrentlyPublic: boolean;
   firstSeenAt: string;
   lastSeenAt: string;
@@ -22,6 +23,7 @@ export interface ArchiveDocument {
   mimeType?: string;
   sizeBytes?: number;
   viewerUrl?: string;
+  source?: 'archive' | 'live';
   downloadable: boolean;
   downloadStatus: string;
   storageKey?: string;

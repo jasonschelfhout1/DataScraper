@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import type { ArchiveDocument, ArchiveProject, ArchiveRepository, ArchiveStats } from './archive/types.js';
 import { MemoryObjectStore } from './storage/object-store.js';
+import { LiveFallback } from './omgevingsloket/live-fallback.js';
+import type { OmgevingsloketProvider } from './omgevingsloket/types.js';
 
 const project: ArchiveProject = { id: '11111111-1111-4111-8111-111111111111', projectNumber: '2026045710', title: 'Archive example', municipality: 'Gent', isCurrentlyPublic: true, firstSeenAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), documentCount: 2 };
 const archived: ArchiveDocument = { id: '22222222-2222-4222-8222-222222222222', projectNumber: project.projectNumber, upstreamUuid: 'document_one', filename: 'plan.pdf', downloadable: true, downloadStatus: 'downloaded', storageKey: 'projects/2026045710/document_one/plan.pdf', firstSeenAt: new Date().toISOString() };
@@ -12,6 +14,13 @@ const viewOnly: ArchiveDocument = { id: '33333333-3333-4333-8333-333333333333', 
 const stats: ArchiveStats = { projects: 1, currentlyPublicProjects: 1, documents: 2, archivedDocuments: 1, viewOnlyDocuments: 1, pendingDownloads: 0, failedDownloads: 0, pendingTasks: 0, paused: false };
 const archive: ArchiveRepository = { searchProjects: async () => ({ projects: [project], total: 1 }), filters: async () => ({ municipalities: ['Gent'], statuses: [], publicationTypes: ['BESLISSING'] }), getProject: async (number) => number === project.projectNumber ? project : undefined, getDocuments: async () => [archived, viewOnly], getDocument: async (id) => [archived, viewOnly].find((document) => document.id === id), stats: async () => stats };
 function app() { return createApp(archive, new MemoryObjectStore(), pino({ enabled: false })); }
+const liveProvider: OmgevingsloketProvider = {
+  searchProjects: async () => ({ projects: [], page: 0, totalPages: 0, last: true }),
+  getProject: async (projectNumber) => ({ projectNumber, title: 'Live example', municipality: 'Gent', status: 'Public' }),
+  getDocuments: async (projectNumber) => [{ id: 'live_document_123', projectNumber, name: 'live-plan.pdf', mimeType: 'application/pdf', downloadable: true }],
+  downloadDocument: async () => ({ stream: Readable.from(Buffer.from('live pdf')), filename: 'live-plan.pdf', contentType: 'application/pdf', contentLength: 8 }),
+};
+function appWithLiveFallback() { return createApp(archive, new MemoryObjectStore(), pino({ enabled: false }), new LiveFallback(liveProvider, 60_000)); }
 async function appWithArchivedFile() {
   const store = new MemoryObjectStore();
   await store.put(archived.storageKey!, Readable.from(Buffer.from('archived plan')));
@@ -44,12 +53,20 @@ describe('archive API', () => {
   });
   it('never offers an R2 download for view-only documents', async () => {
     const agent = request.agent(app()); await signIn(agent).expect(200);
-    await agent.get(`/api/archive/documents/${viewOnly.id}/download`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'This document was not archived for download.' });
+    await agent.get(`/api/archive/documents/${viewOnly.id}/download`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'This document is not publicly downloadable.' });
   });
   it('creates a ZIP only from archived documents that belong to the project', async () => {
     const agent = request.agent(await appWithArchivedFile()); await signIn(agent).expect(200);
     await agent.get(`/api/archive/projects/${project.projectNumber}/download`).expect('content-type', 'application/zip').expect('content-disposition', `attachment; filename="omgevingsloket-${project.projectNumber}.zip"`).expect(200);
     await agent.get(`/api/archive/projects/${project.projectNumber}/download?documentId=${viewOnly.id}`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are unavailable for download.' });
+  });
+  it('uses an authorized, revalidated live fallback only for an explicit project lookup', async () => {
+    const agent = request.agent(appWithLiveFallback()); await signIn(agent).expect(200);
+    await agent.get('/api/live/projects?input=2026123456').expect(200).expect(({ body }) => expect(body).toMatchObject({ projectNumber: '2026123456', source: 'live' }));
+    const documents = await agent.get('/api/live/projects/2026123456/documents').expect(200);
+    const token = documents.body.documents[0].id as string;
+    await agent.get(`/api/live/documents/${token}/download?projectNumber=2026123456`).expect('content-type', 'application/pdf').expect(200);
+    await agent.get(`/api/live/documents/${token}/download?projectNumber=2026000000`).expect(404);
   });
   it('rate limits invalid login attempts', async () => {
     const candidate = request(app()); for (let i = 0; i < 5; i += 1) await candidate.post('/api/auth/login').send({ username: 'test-user', password: 'wrong' }).expect(401);

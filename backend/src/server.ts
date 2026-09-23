@@ -9,10 +9,12 @@ import { config } from './config.js';
 import { databasePool } from './db/client.js';
 import { PgArchiveRepository } from './db/repositories/archive-repository.js';
 import { R2ObjectStore } from './storage/object-store.js';
+import { HttpOmgevingsloketProvider } from './omgevingsloket/http-provider.js';
+import { LiveFallback } from './omgevingsloket/live-fallback.js';
 
 const shutdownTimeoutMs = 10_000;
 const logger = pino({ level: config.LOG_LEVEL });
-const app = createApp(new PgArchiveRepository(databasePool()), new R2ObjectStore(), logger);
+const app = createApp(new PgArchiveRepository(databasePool()), new R2ObjectStore(), logger, new LiveFallback(new HttpOmgevingsloketProvider(), config.CACHE_TTL_MS));
 const here = dirname(fileURLToPath(import.meta.url));
 const frontend = resolve(here, '../../frontend/dist');
 if (existsSync(frontend)) {

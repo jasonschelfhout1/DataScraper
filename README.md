@@ -1,6 +1,6 @@
 # Omgevingsloket Archive
 
-An authenticated, archive-first utility for documents that the Flemish Omgevingsloket Inzageloket has made publicly downloadable. Normal users search PostgreSQL-backed archive data; browser requests never cause live Omgevingsloket traffic.
+An authenticated, archive-first utility for documents that the Flemish Omgevingsloket Inzageloket has made publicly downloadable. Normal searches use PostgreSQL-backed archive data. When an exact project number or official project URL is absent from the archive, an explicit, rate-limited fallback can query the official site using a manually authorized session.
 
 The archive grows as the crawler observes currently public projects. It cannot guarantee recovery of historical projects that disappeared before the crawler saw them. Copyright/view-only files are stored only as metadata; no viewer rendering, watermark removal, or download restriction bypass is attempted.
 
@@ -8,7 +8,7 @@ The archive grows as the crawler observes currently public projects. It cannot g
 
 - PostgreSQL holds project/document metadata, provenance, archive status, crawler queue, leases, and pause state.
 - Private Cloudflare R2 holds only legitimately downloadable (`PUBLIEK_DOWNLOAD`) binaries.
-- The crawler is the sole live Omgevingsloket client. It is slow, concurrency-one, resumable, and pauses if manual visitor verification expires.
+- The crawler is slow, concurrency-one, resumable, and pauses if manual visitor verification expires. The web app may additionally make a rate-limited live request only after an exact project lookup misses the archive, or when an archived public file is unavailable.
 - Express serves authenticated archive APIs and generates short-lived R2 download links. React never receives R2 write credentials or the Omgevingsloket session cookie.
 
 See [archive architecture](docs/archive-architecture.md), [crawler](docs/crawler.md), [storage](docs/storage.md), and [confirmed upstream API evidence](docs/omgevingsloket-api.md).
@@ -26,7 +26,7 @@ npm run db:migrate
 
 Set in `.env`: `DATABASE_URL`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `AUTH_SESSION_SECRET`, and the R2 variables. Generate the session secret with `openssl rand -base64 48`. `.env` must never be committed.
 
-Run the web app with `npm run dev`. It displays a login screen, then searches the local archive. `GET /api/health` remains public; archive APIs require the signed HTTP-only session cookie. Login attempts and authenticated API use remain rate-limited.
+Run the web app with `npm run dev`. It displays a login screen, then searches the local archive. If an exact 10-digit number, `OMV_` number, or official project URL is absent, it offers that result directly from the official site. The session is never bypassed: expired verification produces a reauthorization message. `GET /api/health` remains public; archive APIs require the signed HTTP-only session cookie. Login attempts and live fallback calls remain rate-limited.
 
 ## Crawler and discovery
 
@@ -81,6 +81,8 @@ R2_BUCKET
 R2_ENDPOINT
 DATABASE_URL
 ```
+
+`OMGEVINGSLOKET_COOKIE_HEADER` is required on the **web service** as well as the crawler when live fallback is enabled. It is a sensitive, temporary session credential; re-run `npm run authorize`, replace the Render secret, and redeploy whenever verification expires. Do not place it in a frontend variable or commit it.
 
 Run `npm run db:migrate` once against the external `DATABASE_URL` before enabling the crawler. The cron uses `npm run crawl:once`; use `npm run crawl:worker` only for a deliberate future Background Worker deployment, never alongside the cron without operational review.
 
