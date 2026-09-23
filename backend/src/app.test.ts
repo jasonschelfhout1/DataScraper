@@ -58,7 +58,7 @@ describe('archive API', () => {
   it('creates a ZIP only from archived documents that belong to the project', async () => {
     const agent = request.agent(await appWithArchivedFile()); await signIn(agent).expect(200);
     await agent.get(`/api/archive/projects/${project.projectNumber}/download`).expect('content-type', 'application/zip').expect('content-disposition', `attachment; filename="omgevingsloket-${project.projectNumber}.zip"`).expect(200);
-    await agent.get(`/api/archive/projects/${project.projectNumber}/download?documentId=${viewOnly.id}`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are unavailable for download.' });
+    await agent.get(`/api/archive/projects/${project.projectNumber}/download?documentId=${viewOnly.id}`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are not stored in the archive bucket.' });
   });
   it('uses an authorized, revalidated live fallback only for an explicit project lookup', async () => {
     const agent = request.agent(appWithLiveFallback()); await signIn(agent).expect(200);

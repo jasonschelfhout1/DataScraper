@@ -79,23 +79,15 @@ export function createApp(archive: ArchiveRepository, objectStore: ObjectStore, 
       const project = await archive.getProject(number);
       if (!project) return response.status(404).json({ code: 'NOT_FOUND', message: 'Project is not archived yet.' });
       const requestedIds = parseBulkDocumentIds(request.query);
-      const publicDocuments = (await archive.getDocuments(number)).filter((document) => document.downloadable);
-      const documents = requestedIds.length ? publicDocuments.filter((document) => requestedIds.includes(document.id)) : publicDocuments;
-      if (requestedIds.length && documents.length !== requestedIds.length) return response.status(409).json({ code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are unavailable for download.' });
-      if (!documents.length) return response.status(409).json({ code: 'NO_ARCHIVED_DOCUMENTS', message: 'This project has no publicly downloadable documents.' });
-      if (documents.length > config.MAX_DOCUMENTS_PER_DOWNLOAD) return response.status(413).json({ code: 'DOWNLOAD_LIMIT', message: `This project has more than ${config.MAX_DOCUMENTS_PER_DOWNLOAD} downloadable documents. Download files individually.` });
-
-      const availableStorageKeys = new Set<string>();
-      for (const document of documents) if (document.downloadStatus === 'downloaded' && document.storageKey && await objectStore.exists(document.storageKey)) availableStorageKeys.add(document.storageKey);
-      const liveCandidates = documents.filter((document) => !document.storageKey || !availableStorageKeys.has(document.storageKey));
-      const resolvedLive = liveCandidates.length ? await requireLive(live).resolveUpstreamDocuments(number, liveCandidates.map((document) => document.upstreamUuid)) : [];
-      const liveByUpstreamId = new Map(resolvedLive.map((document) => [document.id, document]));
-
-      streamZip(response, `omgevingsloket-${number}.zip`, documents.map((document) => document.filename), async (index) => {
-        const document = documents[index]!;
-        if (document.storageKey && availableStorageKeys.has(document.storageKey)) return objectStore.get(document.storageKey);
-        return (await requireLive(live).downloadResolvedDocument(number, liveByUpstreamId.get(document.upstreamUuid)!)).stream;
-      });
+      const storedDocuments = (await archive.getDocuments(number)).filter((document) => document.downloadable && document.downloadStatus === 'downloaded' && document.storageKey);
+      const selected = requestedIds.length ? storedDocuments.filter((document) => requestedIds.includes(document.id)) : storedDocuments;
+      if (requestedIds.length && selected.length !== requestedIds.length) return response.status(409).json({ code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are not stored in the archive bucket.' });
+      const documents: ArchiveDocument[] = [];
+      for (const document of selected) if (await objectStore.exists(document.storageKey!)) documents.push(document);
+      if (requestedIds.length && documents.length !== requestedIds.length) return response.status(409).json({ code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are no longer present in the archive bucket.' });
+      if (!documents.length) return response.status(409).json({ code: 'NO_ARCHIVED_DOCUMENTS', message: 'This project has no downloadable files in the archive bucket.' });
+      if (documents.length > config.MAX_DOCUMENTS_PER_DOWNLOAD) return response.status(413).json({ code: 'DOWNLOAD_LIMIT', message: `This project has more than ${config.MAX_DOCUMENTS_PER_DOWNLOAD} archived documents. Download files individually.` });
+      streamZip(response, `omgevingsloket-${number}.zip`, documents.map((document) => document.filename), async (index) => objectStore.get(documents[index]!.storageKey!));
     } catch (error) { next(error); }
   });
   app.get('/api/archive/documents/:documentId/download', async (request, response, next) => {
