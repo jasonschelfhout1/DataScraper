@@ -12,7 +12,7 @@ const project: ArchiveProject = { id: '11111111-1111-4111-8111-111111111111', pr
 const archived: ArchiveDocument = { id: '22222222-2222-4222-8222-222222222222', projectNumber: project.projectNumber, upstreamUuid: 'document_one', filename: 'plan.pdf', downloadable: true, downloadStatus: 'downloaded', storageKey: 'projects/2026045710/document_one/plan.pdf', firstSeenAt: new Date().toISOString() };
 const viewOnly: ArchiveDocument = { id: '33333333-3333-4333-8333-333333333333', projectNumber: project.projectNumber, upstreamUuid: 'document_two', filename: 'copyright.pdf', downloadable: false, downloadStatus: 'view_only', firstSeenAt: new Date().toISOString() };
 const stats: ArchiveStats = { projects: 1, currentlyPublicProjects: 1, documents: 2, archivedDocuments: 1, viewOnlyDocuments: 1, pendingDownloads: 0, failedDownloads: 0, pendingTasks: 0, paused: false };
-const archive: ArchiveRepository = { searchProjects: async () => ({ projects: [project], total: 1 }), filters: async () => ({ municipalities: ['Gent'], statuses: [], publicationTypes: ['BESLISSING'] }), getProject: async (number) => number === project.projectNumber ? project : undefined, getDocuments: async () => [archived, viewOnly], getDocument: async (id) => [archived, viewOnly].find((document) => document.id === id), stats: async () => stats };
+const archive: ArchiveRepository = { searchProjects: async () => ({ projects: [project], total: 1 }), filters: async () => ({ municipalities: ['Gent'], statuses: [], publicationTypes: ['BESLISSING'] }), getProject: async (number) => number === project.projectNumber ? project : undefined, getDocuments: async () => [archived, viewOnly], getAllStoredDocuments: async () => [archived], getDocument: async (id) => [archived, viewOnly].find((document) => document.id === id), stats: async () => stats };
 function app() { return createApp(archive, new MemoryObjectStore(), pino({ enabled: false })); }
 const liveProvider: OmgevingsloketProvider = {
   searchProjects: async () => ({ projects: [], page: 0, totalPages: 0, last: true }),
@@ -32,6 +32,7 @@ describe('archive API', () => {
   it('keeps health public and protects all archive routes', async () => {
     await request(app()).get('/api/health').expect(200).expect(({ body }) => expect(body.status).toBe('ok'));
     await request(app()).get('/api/archive/projects').expect(401, { code: 'UNAUTHORIZED', message: 'Authentication required.' });
+    await request(app()).get('/api/archive/download').expect(401);
     await request(app()).get(`/api/archive/documents/${archived.id}/download`).expect(401);
     await request(app()).get(`/api/archive/projects/${project.projectNumber}/download`).expect(401);
   });
@@ -59,6 +60,10 @@ describe('archive API', () => {
     const agent = request.agent(await appWithArchivedFile()); await signIn(agent).expect(200);
     await agent.get(`/api/archive/projects/${project.projectNumber}/download`).expect('content-type', 'application/zip').expect('content-disposition', `attachment; filename="omgevingsloket-${project.projectNumber}.zip"`).expect(200);
     await agent.get(`/api/archive/projects/${project.projectNumber}/download?documentId=${viewOnly.id}`).expect(409, { code: 'NOT_DOWNLOADABLE', message: 'One or more selected documents are not stored in the archive bucket.' });
+  });
+  it('streams one authenticated ZIP containing stored documents from every project', async () => {
+    const agent = request.agent(await appWithArchivedFile()); await signIn(agent).expect(200);
+    await agent.get('/api/archive/download').expect('content-type', 'application/zip').expect('content-disposition', 'attachment; filename="omgevingsloket-archive.zip"').expect(200);
   });
   it('uses an authorized, revalidated live fallback only for an explicit project lookup', async () => {
     const agent = request.agent(appWithLiveFallback()); await signIn(agent).expect(200);

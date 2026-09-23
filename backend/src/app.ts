@@ -67,6 +67,13 @@ export function createApp(archive: ArchiveRepository, objectStore: ObjectStore, 
     try { const query = searchSchema.parse(request.query); response.json(await archive.searchProjects({ query: query.q, municipality: query.municipality || undefined, status: query.status || undefined, publicationType: query.publicationType || undefined, visibility: query.visibility }, query.page, query.size)); } catch (error) { next(error); }
   });
   app.get('/api/archive/filters', async (_request, response, next) => { try { response.json(await archive.filters()); } catch (error) { next(error); } });
+  app.get('/api/archive/download', async (_request, response, next) => {
+    try {
+      const documents = await archive.getAllStoredDocuments();
+      if (!documents.length) return response.status(409).json({ code: 'NO_ARCHIVED_DOCUMENTS', message: 'There are no downloadable files in the archive bucket.' });
+      streamZip(response, 'omgevingsloket-archive.zip', documents.map((document) => `${document.projectNumber}-${document.filename}`), async (index) => objectStore.get(documents[index]!.storageKey!));
+    } catch (error) { next(error); }
+  });
   app.get('/api/archive/projects/:projectNumber', async (request, response, next) => {
     try { const project = await archive.getProject(projectNumber(request)); if (!project) return response.status(404).json({ code: 'NOT_FOUND', message: 'Project is not archived yet.' }); response.json(project); } catch (error) { next(error); }
   });

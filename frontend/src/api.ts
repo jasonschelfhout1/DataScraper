@@ -29,8 +29,8 @@ export const api = {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }),
   }),
   logout: () => request<AuthSession>('/api/auth/logout', { method: 'POST' }),
-  searchArchive: (query: string, filters: ArchiveSearchOptions, page = 0) => {
-    const parameters = new URLSearchParams({ q: query, page: String(page), visibility: filters.visibility });
+  searchArchive: (query: string, filters: ArchiveSearchOptions, page = 0, size = 15) => {
+    const parameters = new URLSearchParams({ q: query, page: String(page), size: String(size), visibility: filters.visibility });
     if (filters.municipality) parameters.set('municipality', filters.municipality);
     if (filters.status) parameters.set('status', filters.status);
     if (filters.publicationType) parameters.set('publicationType', filters.publicationType);

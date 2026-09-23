@@ -69,8 +69,8 @@ describe('authentication boundary', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'test-password' } });
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await screen.findByRole('button', { name: 'Log out test-user' });
-    fireEvent.change(screen.getByLabelText('Search project number, municipality or project title'), { target: { value: '2026045710' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search archive' }));
+    fireEvent.change(screen.getByLabelText('Search archive'), { target: { value: '2026045710' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await waitFor(() => expect(screen.getByLabelText('Username')).toBeTruthy());
   });
 });

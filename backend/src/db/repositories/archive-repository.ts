@@ -23,11 +23,15 @@ export class PgArchiveRepository implements ArchiveRepository {
     return result.rows[0] ? projectRow(result.rows[0]) : undefined;
   }
   async getDocuments(projectNumber: string): Promise<ArchiveDocument[]> {
-    const result = await this.pool.query(`SELECT d.id, p.project_number, d.upstream_uuid, d.filename, d.description, d.category, d.mime_type, d.size_bytes, d.downloadable, d.download_status, d.storage_key, d.first_seen_at FROM documents d JOIN projects p ON p.id = d.project_id WHERE p.project_number = $1 ORDER BY d.filename`, [projectNumber]);
+    const result = await this.pool.query(`SELECT d.id, p.project_number, d.upstream_uuid, d.filename, d.description, d.category, d.mime_type, d.size_bytes, d.downloadable, d.download_status, d.storage_key, d.source_metadata->>'viewerUrl' AS viewer_url, d.first_seen_at FROM documents d JOIN projects p ON p.id = d.project_id WHERE p.project_number = $1 ORDER BY d.filename`, [projectNumber]);
+    return result.rows.map(documentRow);
+  }
+  async getAllStoredDocuments(): Promise<ArchiveDocument[]> {
+    const result = await this.pool.query(`SELECT d.id, p.project_number, d.upstream_uuid, d.filename, d.description, d.category, d.mime_type, d.size_bytes, d.downloadable, d.download_status, d.storage_key, d.source_metadata->>'viewerUrl' AS viewer_url, d.first_seen_at FROM documents d JOIN projects p ON p.id = d.project_id WHERE d.download_status = 'downloaded' AND d.downloadable AND d.storage_key IS NOT NULL ORDER BY p.project_number, d.filename`);
     return result.rows.map(documentRow);
   }
   async getDocument(id: string): Promise<ArchiveDocument | undefined> {
-    const result = await this.pool.query(`SELECT d.id, p.project_number, d.upstream_uuid, d.filename, d.description, d.category, d.mime_type, d.size_bytes, d.downloadable, d.download_status, d.storage_key, d.first_seen_at FROM documents d JOIN projects p ON p.id = d.project_id WHERE d.id = $1`, [id]);
+    const result = await this.pool.query(`SELECT d.id, p.project_number, d.upstream_uuid, d.filename, d.description, d.category, d.mime_type, d.size_bytes, d.downloadable, d.download_status, d.storage_key, d.source_metadata->>'viewerUrl' AS viewer_url, d.first_seen_at FROM documents d JOIN projects p ON p.id = d.project_id WHERE d.id = $1`, [id]);
     return result.rows[0] ? documentRow(result.rows[0]) : undefined;
   }
   async stats(): Promise<ArchiveStats> {
@@ -38,5 +42,5 @@ export class PgArchiveRepository implements ArchiveRepository {
 }
 
 function projectRow(row: Record<string, unknown>): ArchiveProject { return { id: String(row.id), projectNumber: String(row.project_number), ...(row.title ? { title: String(row.title) } : {}), ...(row.municipality ? { municipality: String(row.municipality) } : {}), ...(row.status ? { status: String(row.status) } : {}), ...(row.publication_type ? { publicationType: String(row.publication_type) } : {}), isCurrentlyPublic: Boolean(row.is_currently_public), firstSeenAt: new Date(String(row.first_seen_at)).toISOString(), lastSeenAt: new Date(String(row.last_seen_at)).toISOString(), ...(row.last_crawled_at ? { lastCrawledAt: new Date(String(row.last_crawled_at)).toISOString() } : {}), documentCount: Number(row.document_count ?? 0) }; }
-function documentRow(row: Record<string, unknown>): ArchiveDocument { return { id: String(row.id), projectNumber: String(row.project_number), upstreamUuid: String(row.upstream_uuid), filename: String(row.filename), ...(row.description ? { description: String(row.description) } : {}), ...(row.category ? { category: String(row.category) } : {}), ...(row.mime_type ? { mimeType: String(row.mime_type) } : {}), ...(row.size_bytes !== null && row.size_bytes !== undefined ? { sizeBytes: Number(row.size_bytes) } : {}), downloadable: Boolean(row.downloadable), downloadStatus: String(row.download_status), ...(row.storage_key ? { storageKey: String(row.storage_key) } : {}), firstSeenAt: new Date(String(row.first_seen_at)).toISOString() }; }
+function documentRow(row: Record<string, unknown>): ArchiveDocument { return { id: String(row.id), projectNumber: String(row.project_number), upstreamUuid: String(row.upstream_uuid), filename: String(row.filename), ...(row.description ? { description: String(row.description) } : {}), ...(row.category ? { category: String(row.category) } : {}), ...(row.mime_type ? { mimeType: String(row.mime_type) } : {}), ...(row.size_bytes !== null && row.size_bytes !== undefined ? { sizeBytes: Number(row.size_bytes) } : {}), ...(row.viewer_url ? { viewerUrl: String(row.viewer_url) } : {}), downloadable: Boolean(row.downloadable), downloadStatus: String(row.download_status), ...(row.storage_key ? { storageKey: String(row.storage_key) } : {}), firstSeenAt: new Date(String(row.first_seen_at)).toISOString() }; }
 function filterValues(rows: Array<Record<string, unknown>>): string[] { return rows.flatMap((row) => typeof row.value === 'string' ? [row.value] : []); }

@@ -17,6 +17,7 @@ export interface ArchiveRepository {
   filters(): Promise<ArchiveFilters>;
   getProject(projectNumber: string): Promise<ArchiveProject | undefined>;
   getDocuments(projectNumber: string): Promise<ArchiveDocument[]>;
+  getAllStoredDocuments(): Promise<ArchiveDocument[]>;
   getDocument(id: string): Promise<ArchiveDocument | undefined>;
   stats(): Promise<ArchiveStats>;
 }
